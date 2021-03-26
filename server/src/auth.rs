@@ -1,0 +1,346 @@
+use crate::error::Error;
+use anyhow::anyhow;
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
+use rand::RngCore;
+use ring::aead;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+
+static USERS: Lazy<RwLock<HashMap<String, User>>> = Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Used for role differentiation to showcase authorization of the admin route.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Role {
+    Admin,
+    User,
+}
+
+impl Role {
+    // Doesn't use std::str::FromStr since that requires a Result and this is infallible.
+    fn from_str(role: &str) -> Self {
+        match role {
+            "admin" => Self::Admin,
+            _ => Self::User,
+        }
+    }
+
+    fn to_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::User => "user",
+        }
+        .into()
+    }
+}
+
+/// User storage
+#[derive(Debug)]
+pub struct User {
+    email: String,
+    hashed_pw: String,
+    role: Role,
+}
+
+/// Initialize a user and an admin account.
+pub fn init_default_users() -> Result<(), anyhow::Error> {
+    store_user("user@localhost", "userpassword", Role::User)?;
+    store_user("admin@localhost", "adminpassword", Role::Admin)
+}
+
+const BCRYPT_COST: u32 = 10;
+
+fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
+    let mut users = USERS.write();
+    let hashed_pw = bcrypt::hash(pw, BCRYPT_COST)?;
+    users.insert(
+        email.into(),
+        User {
+            email: email.into(),
+            hashed_pw,
+            role,
+        },
+    );
+    Ok(())
+}
+
+/// Used for consistent comparison of source IP address. A SocketAddr contains both the L3 IP and
+/// the L4 port, but the L4 port isn't relevant and is prone to changing so it needs to be
+/// discarded.
+fn addr_to_l3_string(addr: &SocketAddr) -> String {
+    match addr {
+        SocketAddr::V4(ipv4) => ipv4.ip().to_string(),
+        SocketAddr::V6(ipv6) => ipv6.ip().to_string(),
+    }
+}
+
+// May want to exchange this for a fixed key depending on circumstances.
+static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
+    let alg = &aead::CHACHA20_POLY1305;
+    let mut key = vec![0u8; alg.key_len()];
+    rand::thread_rng().fill_bytes(&mut key);
+    aead::LessSafeKey::new(aead::UnboundKey::new(&alg, &key).expect("incorrect ring usage"))
+});
+
+/// Content of the encrypted+encoded token that is sent in an authenticate response. The `addr` and
+/// `user_agent` fields are used to mitigate against token theft. The `email` field is used to
+/// ensure that the user that created the token is still valid. The `exp` field is used to ensure
+/// that the token has an expire time (good practice?) and needs to re-authenticate once in a
+/// while.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+struct RefreshToken {
+    addr: String,
+    user_agent: String,
+    email: String,
+    exp: i64,
+}
+
+impl RefreshToken {
+    /// Create a new refresh token.
+    fn new(addr: SocketAddr, user_agent: &str, email: &str) -> Result<Self, Error> {
+        let exp = chrono::Utc::now()
+            .checked_add_signed(chrono::Duration::days(1))
+            .ok_or_else(|| {
+                println!("could not make timestamp");
+                Error::InternalError
+            })?
+            .timestamp();
+
+        Ok(Self {
+            addr: addr_to_l3_string(&addr),
+            user_agent: user_agent.into(),
+            email: email.into(),
+            exp,
+        })
+    }
+
+    /// Returns a `String` to be used as a token by client-side code. The data is serialized,
+    /// encrypted, then base64 encoded.
+    fn encrypt_encode(&self) -> Result<String, Error> {
+        let mut nonce = [0u8; aead::NONCE_LEN];
+        rand::thread_rng().fill_bytes(&mut nonce);
+        let nonce_string = base64::encode(&nonce);
+        let nonce = aead::Nonce::assume_unique_for_key(nonce);
+        let mut token = bincode::serialize(&self).map_err(|_| {
+            println!("failed to serialize refresh token");
+            Error::InternalError
+        })?;
+
+        // don't need the tag
+        REFRESH_TOKEN_KEY
+            .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut token)
+            .map_err(|_| Error::InternalError)?;
+
+        let token_string = base64::encode(&token);
+        Ok(format!("{}.{}", nonce_string, token_string))
+    }
+
+    /// Use this for consistent comparison of the IP address of the requesting client.
+    fn addr_eq(&self, addr: &SocketAddr) -> bool {
+        addr_to_l3_string(addr) == self.addr
+    }
+}
+
+use std::str::FromStr;
+
+impl std::str::FromStr for RefreshToken {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut nonce_token_strs = s.splitn(2, '.');
+        let nonce_str = nonce_token_strs
+            .next()
+            .ok_or(Error::WrongCredentialsError)?;
+        let token_str = nonce_token_strs
+            .next()
+            .ok_or(Error::WrongCredentialsError)?;
+        let nonce_bytes = base64::decode(nonce_str).map_err(|_| Error::WrongCredentialsError)?;
+        let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes)
+            .map_err(|_| Error::WrongCredentialsError)?;
+        let mut token_bytes =
+            base64::decode(token_str).map_err(|_| Error::WrongCredentialsError)?;
+        let token_bin = REFRESH_TOKEN_KEY
+            .open_in_place(nonce, aead::Aad::empty(), token_bytes.as_mut())
+            .map_err(|_| Error::WrongCredentialsError)?;
+        Ok(bincode::deserialize::<RefreshToken>(&token_bin)
+            .map_err(|_| Error::WrongCredentialsError)?)
+    }
+}
+
+static REFRESH_TOKENS: Lazy<RwLock<HashSet<RefreshToken>>> =
+    Lazy::new(|| RwLock::new(HashSet::new()));
+
+fn add_refresh_token(addr: SocketAddr, user_agent: &str, email: &str) -> Result<String, Error> {
+    let token = RefreshToken::new(addr, user_agent, email)?;
+    let ret = token.encrypt_encode()?;
+    let mut tokens = REFRESH_TOKENS.write();
+    tokens.insert(token);
+    Ok(ret)
+}
+
+#[derive(Deserialize)]
+pub struct AuthenticateRequest {
+    pub email: String,
+    pub pw: String,
+}
+
+/// On success, returns a refresh token that can be used to get access tokens.
+///
+/// The refresh token is opaque and should only be able to be read by this server.
+///
+/// This contrasts the access token which is a JWT and has claims that are publicly visible. The
+/// claims in an access token can be used by the client-side code to manipulate what the user can
+/// see based on the claims.
+///
+/// Unlike the access token, the browser has does not need to know what's inside a refresh token -
+/// they just need to give it back to get their access tokens. Thus this function (mis?)uses
+/// symmetric encryption from `ring::aead`, so that the browser does not know what's inside.
+///
+/// I am not a security professional and so am unsure if the following is correct or not:
+///
+/// The implementation exposes the nonce and does not check for re-used nonces. My understanding is
+/// that in `ring:aead`, the intent of the nonce to protect against attacks the network
+/// communication, e.g. replay attacks in https, ssh.
+///
+/// For symmetric keys, accidentally re-using a nonce does not risk leaking the key. In this
+/// webserver, the encrypted message is intended to be replayed back, so exposing the nonce and
+/// allowing duplicates should be fine.
+///
+/// The token should only be visible in the user's browser - not through network communication,
+/// because network comms should be encrypted via https. In addition, token theft is mitigated by
+/// checking the request's L3 source IP and the user agent header in the `access` function.
+pub fn authenticate(
+    addr: SocketAddr,
+    user_agent: &str,
+    req: &AuthenticateRequest,
+) -> Result<String, Error> {
+    let users = USERS.read();
+    let user = users.get(&req.email).ok_or(Error::WrongCredentialsError)?;
+    match bcrypt::verify(&req.pw, &user.hashed_pw).map_err(|e| {
+        println!("bcrypt verify err: {}", e);
+        Error::InternalError
+    })? {
+        true => Ok(add_refresh_token(addr, user_agent, &user.email)?),
+        false => Err(Error::WrongCredentialsError),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AccessRequest {
+    pub refresh_token: String,
+}
+
+/// Remove a bad refresh token from the set of known tokens.
+fn remove_bad_refresh_token(
+    tokens: parking_lot::RwLockReadGuard<HashSet<RefreshToken>>,
+    token: &RefreshToken,
+) -> Error {
+    // Tried to use an upgradeable guard, but couldn't make it work. Either
+    // `parking_lot::RawRwLock` doesn't implement `lock_api::RawRwLockUpgrade`, or I'm too dumb to
+    // figure out how to use it.
+    drop(tokens);
+    let mut tokens = REFRESH_TOKENS.write();
+    tokens.remove(token);
+    Error::WrongCredentialsError
+}
+
+/// On success, returns an access token that can be used to authorize with other APIs.
+///
+/// The access request includes a refresh token that will only work for the L3 IP and user agent
+/// that originally created the token. If the provided token is used from a different IP or user
+/// agent, then the token will be invalidated.
+pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<String, Error> {
+    let refresh_token = RefreshToken::from_str(&req.refresh_token)?;
+    let tokens = REFRESH_TOKENS.read();
+
+    // make sure the token is known
+    tokens
+        .get(&refresh_token)
+        .ok_or(Error::WrongCredentialsError)?;
+
+    // remove token if expired
+    if refresh_token.exp < chrono::Utc::now().timestamp() {
+        return Err(remove_bad_refresh_token(tokens, &refresh_token));
+    }
+
+    // ensure token is used by same user agent and originates from same IP
+    if user_agent != refresh_token.user_agent || !refresh_token.addr_eq(&addr) {
+        println!(
+            "token used by different addr/agent {}/{}, token: {:?}",
+            addr, user_agent, &refresh_token
+        );
+        return Err(remove_bad_refresh_token(tokens, &refresh_token));
+    }
+
+    let users = USERS.read();
+    let user = users.get(&refresh_token.email).ok_or_else(|| {
+        println!("valid token for non-existent email {:?}", refresh_token);
+        remove_bad_refresh_token(tokens, &refresh_token)
+    })?;
+
+    create_jwt(&user).map_err(|e| {
+        println!("jwt create err: {}", e);
+        Error::InternalError
+    })
+}
+
+// May want to exchange this for a fixed key depending on circumstances.
+static MY_SECRET: Lazy<[u8; 256]> = Lazy::new(|| {
+    let mut a = [0u8; 256];
+    rand::thread_rng().fill_bytes(&mut a);
+    a
+});
+static ENCODING_KEY: Lazy<jsonwebtoken::EncodingKey> =
+    Lazy::new(|| jsonwebtoken::EncodingKey::from_secret(MY_SECRET.as_ref()));
+static DECODING_KEY: Lazy<jsonwebtoken::DecodingKey> =
+    Lazy::new(|| jsonwebtoken::DecodingKey::from_secret(MY_SECRET.as_ref()));
+static VALIDATION_PARAMS: Lazy<jsonwebtoken::Validation> =
+    Lazy::new(|| jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512));
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Claims {
+    email: String,
+    role: String,
+    exp: i64,
+}
+
+fn create_jwt(user: &User) -> Result<String, anyhow::Error> {
+    let exp = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::seconds(60))
+        .ok_or_else(|| anyhow!("could not make timestamp"))?
+        .timestamp();
+
+    let claims = Claims {
+        email: user.email.clone(),
+        role: user.role.to_str().into(),
+        exp,
+    };
+    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
+    jsonwebtoken::encode(&header, &claims, &ENCODING_KEY).map_err(|e| anyhow!(e))
+}
+
+/// Checks that a request is allowed to proceed based on the authoration header. Returns the email
+/// of the user on success. The `auth_header` is checked to ensure it is a valid JWT and that its
+/// claims satisfy `role_required`.
+///
+/// In other words, an error will be returned if the JWT is invalid, or if the JWT is valid but the
+/// claimed role is insufficient.
+pub fn authorize(role_required: Role, auth_header: String) -> Result<String, Error> {
+    const BEARER: &str = "Bearer ";
+
+    if !auth_header.starts_with(BEARER) {
+        return Err(Error::InvalidAuthHeaderError);
+    }
+    let jwt_str = auth_header.trim_start_matches(BEARER);
+
+    let decoded_claims =
+        jsonwebtoken::decode::<Claims>(&jwt_str, &DECODING_KEY, &VALIDATION_PARAMS)
+            .map_err(|_| Error::JWTTokenError)?;
+
+    if role_required == Role::Admin && Role::from_str(&decoded_claims.claims.role) != Role::Admin {
+        return Err(Error::NoPermissionError.into());
+    }
+
+    Ok(decoded_claims.claims.email)
+}
