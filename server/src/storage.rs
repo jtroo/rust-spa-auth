@@ -30,8 +30,8 @@ impl Storage for RwLock<HashMap<String, User>> {
     }
 }
 
-/// Returns an implementor of `Storage + Send + Sync` that stores data in-memory, as opposed to a
-/// file or database.
+/// Returns an implementor of `Storage + Send + Sync` that stores data in memory, as opposed to in
+/// a file or database.
 pub fn new_in_memory_storage() -> impl Storage + Send + Sync {
     RwLock::new(HashMap::<String, User>::new())
 }
