@@ -1,15 +1,12 @@
 //! Provides functions for authentication
 //!
 
-use crate::error::Error;
-use crate::storage;
+use crate::{error::Error, storage};
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use rand::RngCore;
 use ring::aead;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::net::SocketAddr;
 
 static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
@@ -86,11 +83,11 @@ static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
 /// that the token has an expire time (good practice?) and needs to re-authenticate once in a
 /// while.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-struct RefreshToken {
-    addr: String,
-    user_agent: String,
-    email: String,
-    exp: i64,
+pub struct RefreshToken {
+    pub addr: String,
+    pub user_agent: String,
+    pub email: String,
+    pub exp: i64,
 }
 
 impl RefreshToken {
@@ -165,14 +162,10 @@ impl std::str::FromStr for RefreshToken {
     }
 }
 
-static REFRESH_TOKENS: Lazy<RwLock<HashSet<RefreshToken>>> =
-    Lazy::new(|| RwLock::new(HashSet::new()));
-
 fn add_refresh_token(addr: SocketAddr, user_agent: &str, email: &str) -> Result<String, Error> {
     let token = RefreshToken::new(addr, user_agent, email)?;
     let ret = token.encrypt_encode()?;
-    let mut tokens = REFRESH_TOKENS.write();
-    tokens.insert(token);
+    STORAGE.add_refresh_token(token)?;
     Ok(ret)
 }
 
@@ -266,16 +259,15 @@ pub struct AccessRequest {
 /// agent, then the token will be invalidated.
 pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<String, Error> {
     let refresh_token = RefreshToken::from_str(&req.refresh_token)?;
-    let tokens = REFRESH_TOKENS.read();
 
     // make sure the token is known
-    tokens
-        .get(&refresh_token)
-        .ok_or(Error::WrongCredentialsError)?;
+    if !STORAGE.refresh_token_exists(&refresh_token) {
+        return Err(Error::WrongCredentialsError);
+    }
 
     // remove token if expired
     if refresh_token.exp < chrono::Utc::now().timestamp() {
-        return Err(remove_bad_refresh_token(tokens, &refresh_token));
+        return Err(remove_bad_refresh_token(&refresh_token));
     }
 
     // ensure token is used by same user agent and originates from same IP
@@ -284,12 +276,12 @@ pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<
             "token used by different addr/agent {}/{}, token: {:?}",
             addr, user_agent, &refresh_token
         );
-        return Err(remove_bad_refresh_token(tokens, &refresh_token));
+        return Err(remove_bad_refresh_token(&refresh_token));
     }
 
     let user = STORAGE.get_user(&refresh_token.email).ok_or_else(|| {
         println!("valid token for non-existent email {:?}", refresh_token);
-        remove_bad_refresh_token(tokens, &refresh_token)
+        remove_bad_refresh_token(&refresh_token)
     })?;
 
     create_jwt(&user).map_err(|e| {
@@ -300,15 +292,11 @@ pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<
 
 /// Remove a bad refresh token from the set of known tokens.
 fn remove_bad_refresh_token(
-    tokens: parking_lot::RwLockReadGuard<HashSet<RefreshToken>>,
     token: &RefreshToken,
 ) -> Error {
-    // Tried to use an upgradeable guard, but couldn't make it work. Either
-    // `parking_lot::RawRwLock` doesn't implement `lock_api::RawRwLockUpgrade`, or I'm too dumb to
-    // figure out how to use it.
-    drop(tokens);
-    let mut tokens = REFRESH_TOKENS.write();
-    tokens.remove(token);
+    if let Err(e) = STORAGE.remove_refresh_token(token) {
+        return e;
+    }
     Error::WrongCredentialsError
 }
 
