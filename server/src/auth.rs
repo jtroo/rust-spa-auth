@@ -1,14 +1,16 @@
 use crate::error::Error;
+use crate::storage;
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rand::RngCore;
 use ring::aead;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 
-static USERS: Lazy<RwLock<HashMap<String, User>>> = Lazy::new(|| RwLock::new(HashMap::new()));
+static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
+    = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
 
 /// Used for role differentiation to showcase authorization of the admin route.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,16 +33,7 @@ impl Role {
             Self::Admin => "admin",
             Self::User => "user",
         }
-        .into()
     }
-}
-
-/// User storage
-#[derive(Clone, Debug)]
-pub struct User {
-    email: String,
-    hashed_pw: String,
-    role: Role,
 }
 
 /// Initialize a user and an admin account.
@@ -56,17 +49,14 @@ pub fn init_default_users() -> Result<(), anyhow::Error> {
 const BCRYPT_COST: u32 = 10;
 
 fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
-    let mut users = USERS.write();
     let hashed_pw = bcrypt::hash(pw, BCRYPT_COST)?;
-    users.insert(
-        email.into(),
-        User {
+    STORAGE.store_user(
+        storage::User {
             email: email.into(),
             hashed_pw,
             role,
-        },
-    );
-    Ok(())
+        }
+    ).map_err(|e| anyhow!(e))
 }
 
 /// Used for consistent comparison of source IP address. A SocketAddr contains both the L3 IP and
@@ -219,7 +209,7 @@ pub async fn authenticate(
     user_agent: &str,
     req: &AuthenticateRequest,
 ) -> Result<String, Error> {
-    let user = match get_user(&req.email) {
+    let user = match STORAGE.get_user(&req.email) {
         Some(v) => v,
         None => {
             return Err(pretend_password_processing().await);
@@ -232,12 +222,6 @@ pub async fn authenticate(
         true => Ok(add_refresh_token(addr, user_agent, &user.email)?),
         false => Err(Error::WrongCredentialsError),
     }
-}
-
-/// Need to clone the user because the rwlock guard is not `Send`.
-fn get_user(email: &str) -> Option<User> {
-    let users = USERS.read();
-    users.get(email).map(|user| user.clone())
 }
 
 /// This exists to pretend that a password is being processed in the cases where it's not. This
@@ -307,8 +291,7 @@ pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<
         return Err(remove_bad_refresh_token(tokens, &refresh_token));
     }
 
-    let users = USERS.read();
-    let user = users.get(&refresh_token.email).ok_or_else(|| {
+    let user = STORAGE.get_user(&refresh_token.email).ok_or_else(|| {
         println!("valid token for non-existent email {:?}", refresh_token);
         remove_bad_refresh_token(tokens, &refresh_token)
     })?;
@@ -339,7 +322,7 @@ struct Claims {
     exp: i64,
 }
 
-fn create_jwt(user: &User) -> Result<String, anyhow::Error> {
+fn create_jwt(user: &storage::User) -> Result<String, anyhow::Error> {
     let exp = chrono::Utc::now()
         .checked_add_signed(chrono::Duration::seconds(60))
         .ok_or_else(|| anyhow!("could not make timestamp"))?
@@ -373,7 +356,7 @@ pub fn authorize(role_required: Role, auth_header: String) -> Result<String, Err
             .map_err(|_| Error::JWTTokenError)?;
 
     if role_required == Role::Admin && Role::from_str(&decoded_claims.claims.role) != Role::Admin {
-        return Err(Error::NoPermissionError.into());
+        return Err(Error::NoPermissionError);
     }
 
     Ok(decoded_claims.claims.email)

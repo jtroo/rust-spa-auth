@@ -50,6 +50,6 @@ pub async fn handle_rejection(
         Ok(warp::reply::with_status(json, code).into_response())
     } else {
         eprintln!("builtin rejection: {:?}", err);
-        return Ok(err.default_response())
+        Ok(err.default_response())
     }
 }

@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+mod storage;
 
 use warp::{http, filters, Filter};
 use error::Error;
@@ -113,7 +114,9 @@ async fn access_handler(
 fn with_auth(
     required_role: auth::Role
 ) -> impl Filter<Extract = (String,), Error = warp::Rejection> + Clone {
-    filters::header::header::<String>(http::header::AUTHORIZATION.as_str())
+    use once_cell::sync::Lazy;
+    static AUTH_HEADER: Lazy<&str> = Lazy::new(|| http::header::AUTHORIZATION.as_str());
+    filters::header::header::<String>(&AUTH_HEADER)
         .map(move |auth_header| (required_role, auth_header))
         .and_then(authorize)
 }
@@ -122,7 +125,7 @@ fn with_auth(
 async fn authorize(
     (required_role, auth_header): (auth::Role, String)
 ) -> Result<String, warp::Rejection> {
-    auth::authorize(required_role, auth_header).map_err(|e| warp::reject::custom(e))
+    auth::authorize(required_role, auth_header).map_err(warp::reject::custom)
 }
 
 /// Sample handler for a user
