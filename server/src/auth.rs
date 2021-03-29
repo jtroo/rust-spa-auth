@@ -1,3 +1,6 @@
+//! Provides functions for authentication
+//!
+
 use crate::error::Error;
 use crate::storage;
 use anyhow::anyhow;
@@ -206,8 +209,8 @@ pub struct AuthenticateRequest {
 /// checking the request's L3 source IP and the user agent header in the `access` function.
 pub async fn authenticate(
     addr: SocketAddr,
-    user_agent: &str,
-    req: &AuthenticateRequest,
+    user_agent: String,
+    req: AuthenticateRequest,
 ) -> Result<String, Error> {
     let user = match STORAGE.get_user(&req.email) {
         Some(v) => v,
@@ -215,13 +218,19 @@ pub async fn authenticate(
             return Err(pretend_password_processing().await);
         }
     };
-    match bcrypt::verify(&req.pw, &user.hashed_pw).map_err(|e| {
-        println!("bcrypt verify err: {}", e);
+    tokio::task::spawn_blocking(
+        move || {
+                match bcrypt::verify(&req.pw, &user.hashed_pw).map_err(|e| {
+                println!("bcrypt verify err: {}", e);
+                Error::InternalError
+            })? {
+                true => Ok(add_refresh_token(addr, &user_agent, &user.email)?),
+                false => Err(Error::WrongCredentialsError),
+        }
+    }).await.map_err(|e| {
+        println!("tokio err {}", e);
         Error::InternalError
-    })? {
-        true => Ok(add_refresh_token(addr, user_agent, &user.email)?),
-        false => Err(Error::WrongCredentialsError),
-    }
+    })?
 }
 
 /// This exists to pretend that a password is being processed in the cases where it's not. This
@@ -230,7 +239,8 @@ pub async fn authenticate(
 ///
 /// There is currently a bug - on the first time this function is called, the delay is a lot longer
 /// than on every other call. A workaround is to call this function at some point during
-/// initialization.
+/// initialization. I'm too `Lazy` to fix it, so it's called in `init_default_users` to do the
+/// workaround.
 async fn pretend_password_processing() -> Error {
     static PROCESSING_TIME: Lazy<std::time::Duration> = Lazy::new(|| {
         let hashed_pw = bcrypt::hash("badpassword", BCRYPT_COST).expect("could not hash pw");
@@ -247,20 +257,6 @@ async fn pretend_password_processing() -> Error {
 #[derive(Deserialize)]
 pub struct AccessRequest {
     pub refresh_token: String,
-}
-
-/// Remove a bad refresh token from the set of known tokens.
-fn remove_bad_refresh_token(
-    tokens: parking_lot::RwLockReadGuard<HashSet<RefreshToken>>,
-    token: &RefreshToken,
-) -> Error {
-    // Tried to use an upgradeable guard, but couldn't make it work. Either
-    // `parking_lot::RawRwLock` doesn't implement `lock_api::RawRwLockUpgrade`, or I'm too dumb to
-    // figure out how to use it.
-    drop(tokens);
-    let mut tokens = REFRESH_TOKENS.write();
-    tokens.remove(token);
-    Error::WrongCredentialsError
 }
 
 /// On success, returns an access token that can be used to authorize with other APIs.
@@ -300,6 +296,20 @@ pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<
         println!("jwt create err: {}", e);
         Error::InternalError
     })
+}
+
+/// Remove a bad refresh token from the set of known tokens.
+fn remove_bad_refresh_token(
+    tokens: parking_lot::RwLockReadGuard<HashSet<RefreshToken>>,
+    token: &RefreshToken,
+) -> Error {
+    // Tried to use an upgradeable guard, but couldn't make it work. Either
+    // `parking_lot::RawRwLock` doesn't implement `lock_api::RawRwLockUpgrade`, or I'm too dumb to
+    // figure out how to use it.
+    drop(tokens);
+    let mut tokens = REFRESH_TOKENS.write();
+    tokens.remove(token);
+    Error::WrongCredentialsError
 }
 
 // May want to exchange this for a fixed key depending on circumstances.

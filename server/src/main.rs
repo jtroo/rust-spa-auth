@@ -89,7 +89,7 @@ async fn login_handler(
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let addr = ok_or_addr(addr)?;
-    Ok(auth::authenticate(addr, &user_agent, &req).await
+    Ok(auth::authenticate(addr, user_agent, req).await
         .map(|token| warp::http::Response::builder().body(token))?
     )
 }
