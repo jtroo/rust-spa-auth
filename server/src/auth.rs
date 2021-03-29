@@ -36,7 +36,7 @@ impl Role {
 }
 
 /// User storage
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct User {
     email: String,
     hashed_pw: String,
@@ -45,6 +45,10 @@ pub struct User {
 
 /// Initialize a user and an admin account.
 pub fn init_default_users() -> Result<(), anyhow::Error> {
+    // also initialize the duration in `pretend_password_processing`
+    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
+    tokio::task::LocalSet::new().block_on(&rt, pretend_password_processing());
+
     store_user("user@localhost", "userpassword", Role::User)?;
     store_user("admin@localhost", "adminpassword", Role::Admin)
 }
@@ -210,13 +214,17 @@ pub struct AuthenticateRequest {
 /// The token should only be visible in the user's browser - not through network communication,
 /// because network comms should be encrypted via https. In addition, token theft is mitigated by
 /// checking the request's L3 source IP and the user agent header in the `access` function.
-pub fn authenticate(
+pub async fn authenticate(
     addr: SocketAddr,
     user_agent: &str,
     req: &AuthenticateRequest,
 ) -> Result<String, Error> {
-    let users = USERS.read();
-    let user = users.get(&req.email).ok_or(Error::WrongCredentialsError)?;
+    let user = match get_user(&req.email) {
+        Some(v) => v,
+        None => {
+            return Err(pretend_password_processing().await);
+        }
+    };
     match bcrypt::verify(&req.pw, &user.hashed_pw).map_err(|e| {
         println!("bcrypt verify err: {}", e);
         Error::InternalError
@@ -224,6 +232,32 @@ pub fn authenticate(
         true => Ok(add_refresh_token(addr, user_agent, &user.email)?),
         false => Err(Error::WrongCredentialsError),
     }
+}
+
+/// Need to clone the user because the rwlock guard is not `Send`.
+fn get_user(email: &str) -> Option<User> {
+    let users = USERS.read();
+    users.get(email).map(|user| user.clone())
+}
+
+/// This exists to pretend that a password is being processed in the cases where it's not. This
+/// makes it harder to guess if a malicious request got an existing email with non-matching
+/// password, vs. an email that does not exist.
+///
+/// There is currently a bug - on the first time this function is called, the delay is a lot longer
+/// than on every other call. A workaround is to call this function at some point during
+/// initialization.
+async fn pretend_password_processing() -> Error {
+    static PROCESSING_TIME: Lazy<std::time::Duration> = Lazy::new(|| {
+        let hashed_pw = bcrypt::hash("badpassword", BCRYPT_COST).expect("could not hash pw");
+        let start = std::time::Instant::now();
+        let _ = bcrypt::verify("abcdefg", &hashed_pw);
+        let end = std::time::Instant::now();
+        end - start
+    });
+    println!("pretending to process password - should be an invalid email");
+    tokio::time::sleep(*PROCESSING_TIME).await;
+    Error::WrongCredentialsError
 }
 
 #[derive(Deserialize)]
@@ -320,9 +354,9 @@ fn create_jwt(user: &User) -> Result<String, anyhow::Error> {
     jsonwebtoken::encode(&header, &claims, &ENCODING_KEY).map_err(|e| anyhow!(e))
 }
 
-/// Checks that a request is allowed to proceed based on the authoration header. Returns the email
-/// of the user on success. The `auth_header` is checked to ensure it is a valid JWT and that its
-/// claims satisfy `role_required`.
+/// Checks that a request is allowed to proceed based on the authorization header. Returns the
+/// email of the user on success. The `auth_header` is checked to ensure it is a valid JWT and that
+/// its claims satisfy `role_required`.
 ///
 /// In other words, an error will be returned if the JWT is invalid, or if the JWT is valid but the
 /// claimed role is insufficient.

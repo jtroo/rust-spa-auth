@@ -5,8 +5,7 @@ use warp::{http, filters, Filter};
 use error::Error;
 use std::net::SocketAddr;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     println!("rust spa auth starting");
 
     println!("preparing default users");
@@ -60,11 +59,18 @@ async fn main() {
         .or(warp::fs::file(format!("{}/index.html", WEB_APP_DIR)));
 
     println!("running webserver");
-    warp::serve(routes)
-        .tls()
-        .key_path("tls/server.rsa.key")
-        .cert_path("tls/server.rsa.crt")
-        .run(([127, 0, 0, 1], 9090)).await;
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should start")
+        .block_on(async {
+        warp::serve(routes)
+            .tls()
+                .key_path("tls/server.rsa.key")
+                .cert_path("tls/server.rsa.crt")
+                .run(([127, 0, 0, 1], 9090)).await;
+        });
 }
 
 /// Convenience function for mapping 'Option<SocketAddr>' to a 'Result' with the proper error.
@@ -82,7 +88,7 @@ async fn login_handler(
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let addr = ok_or_addr(addr)?;
-    Ok(auth::authenticate(addr, &user_agent, &req)
+    Ok(auth::authenticate(addr, &user_agent, &req).await
         .map(|token| warp::http::Response::builder().body(token))?
     )
 }
