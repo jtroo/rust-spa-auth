@@ -70,6 +70,8 @@ cargo run --features dev_cors
 - users mocked?
 - better logging
 - testing
+- put refresh token in cookie
+- put access token in cookie
 
 # License
 
