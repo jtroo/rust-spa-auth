@@ -7,7 +7,6 @@ use once_cell::sync::Lazy;
 use rand::RngCore;
 use ring::aead;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 
 static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
     = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
@@ -59,16 +58,6 @@ fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyh
     ).map_err(|e| anyhow!(e))
 }
 
-/// Used for consistent comparison of source IP address. A SocketAddr contains both the L3 IP and
-/// the L4 port, but the L4 port isn't relevant and is prone to changing so it needs to be
-/// discarded.
-fn addr_to_l3_string(addr: &SocketAddr) -> String {
-    match addr {
-        SocketAddr::V4(ipv4) => ipv4.ip().to_string(),
-        SocketAddr::V6(ipv6) => ipv6.ip().to_string(),
-    }
-}
-
 // May want to exchange this for a fixed key depending on circumstances.
 static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
     let alg = &aead::CHACHA20_POLY1305;
@@ -77,24 +66,26 @@ static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
     aead::LessSafeKey::new(aead::UnboundKey::new(&alg, &key).expect("incorrect ring usage"))
 });
 
-/// Content of the encrypted+encoded token that is sent in an authenticate response. The `addr` and
-/// `user_agent` fields are used to mitigate against token theft. The `email` field is used to
-/// ensure that the user that created the token is still valid. The `exp` field is used to ensure
-/// that the token has an expire time (good practice?) and needs to re-authenticate once in a
-/// while.
+/// Content of the encrypted+encoded token that is sent in an authenticate response. The
+/// `user_agent` field is used to mitigate against token theft. It's not a very good one, but can
+/// at least help somewhat. The `email` field is used to ensure that the user that created the
+/// token is still valid. The `exp` field is used to ensure that the token has an expire time (good
+/// practice?) and needs to re-authenticate once in a while.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RefreshToken {
-    pub addr: String,
     pub user_agent: String,
     pub email: String,
     pub exp: i64,
 }
 
+/// 30 days
+const REFRESH_TOKEN_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
+
 impl RefreshToken {
     /// Create a new refresh token.
-    fn new(addr: SocketAddr, user_agent: &str, email: &str) -> Result<Self, Error> {
+    fn new(user_agent: &str, email: &str) -> Result<Self, Error> {
         let exp = chrono::Utc::now()
-            .checked_add_signed(chrono::Duration::days(1))
+            .checked_add_signed(chrono::Duration::seconds(REFRESH_TOKEN_MAX_AGE_SECS))
             .ok_or_else(|| {
                 println!("could not make timestamp");
                 Error::InternalError
@@ -102,7 +93,6 @@ impl RefreshToken {
             .timestamp();
 
         Ok(Self {
-            addr: addr_to_l3_string(&addr),
             user_agent: user_agent.into(),
             email: email.into(),
             exp,
@@ -128,11 +118,6 @@ impl RefreshToken {
 
         let token_string = base64::encode(&token);
         Ok(format!("{}.{}", nonce_string, token_string))
-    }
-
-    /// Use this for consistent comparison of the IP address of the requesting client.
-    fn addr_eq(&self, addr: &SocketAddr) -> bool {
-        addr_to_l3_string(addr) == self.addr
     }
 }
 
@@ -162,8 +147,8 @@ impl std::str::FromStr for RefreshToken {
     }
 }
 
-fn add_refresh_token(addr: SocketAddr, user_agent: &str, email: &str) -> Result<String, Error> {
-    let token = RefreshToken::new(addr, user_agent, email)?;
+fn add_refresh_token(user_agent: &str, email: &str) -> Result<String, Error> {
+    let token = RefreshToken::new(user_agent, email)?;
     let ret = token.encrypt_encode()?;
     STORAGE.add_refresh_token(token)?;
     Ok(ret)
@@ -201,10 +186,9 @@ pub struct AuthenticateRequest {
 /// because network comms should be encrypted via https. In addition, token theft is mitigated by
 /// checking the request's L3 source IP and the user agent header in the `access` function.
 pub async fn authenticate(
-    addr: SocketAddr,
     user_agent: String,
     req: AuthenticateRequest,
-) -> Result<String, Error> {
+) -> Result<(String, i64), Error> {
     let user = match STORAGE.get_user(&req.email) {
         Some(v) => v,
         None => {
@@ -217,7 +201,12 @@ pub async fn authenticate(
                 println!("bcrypt verify err: {}", e);
                 Error::InternalError
             })? {
-                true => Ok(add_refresh_token(addr, &user_agent, &user.email)?),
+                true => Ok(
+                    (
+                        add_refresh_token(&user_agent, &user.email)?,
+                        REFRESH_TOKEN_MAX_AGE_SECS,
+                    )
+                ),
                 false => Err(Error::WrongCredentialsError),
         }
     }).await.map_err(|e| {
@@ -247,18 +236,13 @@ async fn pretend_password_processing() -> Error {
     Error::WrongCredentialsError
 }
 
-#[derive(Deserialize)]
-pub struct AccessRequest {
-    pub refresh_token: String,
-}
-
 /// On success, returns an access token that can be used to authorize with other APIs.
 ///
 /// The access request includes a refresh token that will only work for the L3 IP and user agent
 /// that originally created the token. If the provided token is used from a different IP or user
 /// agent, then the token will be invalidated.
-pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<String, Error> {
-    let refresh_token = RefreshToken::from_str(&req.refresh_token)?;
+pub fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
+    let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
     if !STORAGE.refresh_token_exists(&refresh_token) {
@@ -271,10 +255,10 @@ pub fn access(addr: SocketAddr, user_agent: &str, req: AccessRequest) -> Result<
     }
 
     // ensure token is used by same user agent and originates from same IP
-    if user_agent != refresh_token.user_agent || !refresh_token.addr_eq(&addr) {
+    if user_agent != refresh_token.user_agent {
         println!(
-            "token used by different addr/agent {}/{}, token: {:?}",
-            addr, user_agent, &refresh_token
+            "token used by different agent {}, token: {:?}",
+            user_agent, &refresh_token
         );
         return Err(remove_bad_refresh_token(&refresh_token));
     }

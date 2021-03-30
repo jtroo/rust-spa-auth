@@ -9,32 +9,37 @@ for Rust application that needs authentication + authorization.
 # Example API Usage
 
 ``` sh
-curl https://localhost:9090/api/auth/login \
+
+curl -v https://localhost:9090/api/auth/login \
   --cacert tls/server.rsa.crt \
   -d '{"email": "user@localhost", "pw": "userpassword"}' \
   -H 'Content-Type: application/json'
-# result:
-# 20JhkbEiIsjAZz32.yN/3tsqTlChhDWrz+z43TEm29V/sqXa2vKtyde/wwRnN0wNZsYObcGrRb2CZYz+eaTgD2oGnS28r4yWqzBL/o9ilvYW8wlWpT4IHq1OideYI2w==
+
+# result is in set-cookie header:
+# set-cookie: refresh_token=ZzmdZ2jSYzRjRs2y.wYrUBTcHbG++Lr7JEO75xXArDWTNrMb1B6SwDWFFuUPNrA9vBWdfIx9+eBAwAUhpApFTj1eUfV7dlmTHRXAZ7I8RWZMC1iqha67lMjykQ7Wxqw==; Max-Age=2592000; path=/api/auth/access; Secure; HttpOnly; SameSite=Lax;
 
 
 curl https://localhost:9090/api/auth/access \
   --cacert tls/server.rsa.crt \
-  -d '{"refresh_token": "20JhkbEiIsjAZz32.yN/3tsqTlChhDWrz+z43TEm29V/sqXa2vKtyde/wwRnN0wNZsYObcGrRb2CZYz+eaTgD2oGnS28r4yWqzBL/o9ilvYW8wlWpT4IHq1OideYI2w=="}' \
-  -H 'Content-Type: application/json'
+  --cookie "refresh_token=QpOddMUkW9wk/S4B.s/a3k3JttPFH3v4j43gxx7KL+3y05Opm1rjiQBV+07z9NXacLv8PeQn6DRDoblFDerGQ9qeUp1TpaNAg5f1cYtLf3t3xnvGkHUDW2TK/mDJr4A=="
+
 # result:
 # eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTY5MjY2NTd9.kj9GR-FPUVmZh2BEvGmbqg6tAz4lsjvLxtcTXOjdDXLwD0KGZ2NrDueuuyJ1Y4z8z98q9VcpDNHYjS4veM2hYw
 
 curl https://localhost:9090/api/user \
   --cacert tls/server.rsa.crt \
-  -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTY5MjY3NjB9.RjT3mn1nD-1xP3iDS0t_TwRdVVkqVsNZlCWgdapNMwTKEI1L5ghXOTwgw06Xj36a7qaRKLO9eM5SwLqLbX5kjQ'
+  -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTcwNjUxMDJ9.imixaRk8YgoEv8Hh33qidty_jGBAo9ewIOd7vWqAjAHiN-MZJOFeSXg25nWx86SW9Pc_QFH_qlFYaSmPG_MfRA'
+
 # result:
 # user user@localhost
 
 curl https://localhost:9090/api/admin \
   --cacert tls/server.rsa.crt \
-  -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTY5MjY3NjB9.RjT3mn1nD-1xP3iDS0t_TwRdVVkqVsNZlCWgdapNMwTKEI1L5ghXOTwgw06Xj36a7qaRKLO9eM5SwLqLbX5kjQ'
+  -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTcwNjUxMDJ9.imixaRk8YgoEv8Hh33qidty_jGBAo9ewIOd7vWqAjAHiN-MZJOFeSXg25nWx86SW9Pc_QFH_qlFYaSmPG_MfRA'
+
 # result:
 # {"message":"no permission","status":"401 Unauthorized"}⏎
+
 ```
 
 # Build to serve the SPA

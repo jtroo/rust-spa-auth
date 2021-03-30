@@ -3,8 +3,6 @@ mod error;
 mod storage;
 
 use warp::{http, filters, Filter};
-use error::Error;
-use std::net::SocketAddr;
 
 fn main() {
     println!("rust spa auth starting");
@@ -15,16 +13,14 @@ fn main() {
     println!("creating routes");
     let login_api = warp::path!("auth"/"login")
         .and(warp::post())
-        .and(filters::addr::remote())
         .and(filters::header::header::<String>("user-agent"))
         .and(warp::body::json())
         .and_then(login_handler);
 
     let access_api = warp::path!("auth"/"access")
-        .and(warp::post())
-        .and(filters::addr::remote())
+        .and(warp::get())
         .and(filters::header::header::<String>("user-agent"))
-        .and(warp::body::json())
+        .and(filters::cookie::cookie("refresh_token"))
         .and_then(access_handler);
 
     let user_route = warp::path!("user")
@@ -74,34 +70,33 @@ fn main() {
         });
 }
 
-/// Convenience function for mapping 'Option<SocketAddr>' to a 'Result' with the proper error.
-fn ok_or_addr(addr: Option<SocketAddr>) -> Result<SocketAddr, Error> {
-    addr.ok_or_else(|| {
-        println!("no src addr for req");
-        Error::InternalError
-    })
-}
-
 /// Used to authenticate with a password and retrieve a refresh token.
 async fn login_handler(
-    addr: Option<SocketAddr>,
     user_agent: String,
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let addr = ok_or_addr(addr)?;
-    Ok(auth::authenticate(addr, user_agent, req).await
-        .map(|token| warp::http::Response::builder().body(token))?
+    Ok(auth::authenticate(user_agent, req).await
+        .map(|(token, max_age)| {
+            const SECURITY_HEADERS: &str = "Secure; HttpOnly; SameSite=Lax;";
+            warp::http::Response::builder()
+                .header(
+                    "set-cookie",
+                    &format!(
+                        "refresh_token={}; Max-Age={}; path=/api/auth/access; {}",
+                        token, max_age, SECURITY_HEADERS
+                    ),
+                )
+                .body("success")
+        })?
     )
 }
 
 /// Used to get a new access token using a refresh token
 async fn access_handler(
-    addr: Option<SocketAddr>,
     user_agent: String,
-    req: auth::AccessRequest,
+    refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let addr = ok_or_addr(addr)?;
-    Ok(auth::access(addr, &user_agent, req)
+    Ok(auth::access(&user_agent, &refresh_token)
         .map(|token| warp::http::Response::builder().body(token))?
     )
 }
