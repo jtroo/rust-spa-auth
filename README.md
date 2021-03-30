@@ -77,10 +77,6 @@ cargo run --features dev_cors
 - lets-encrypt
 - better logging
 - testing
-- fix refresh token impl - L3 address is no good
-  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#defense-in-depth-techniques
-  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#cookie-with-__host-prefix
-- add to access token: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
 
 # License
 

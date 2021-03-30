@@ -58,7 +58,7 @@ fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyh
     ).map_err(|e| anyhow!(e))
 }
 
-// May want to exchange this for a fixed key depending on circumstances.
+// Need to change this if want session persistence after restarting the binary.
 static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
     let alg = &aead::CHACHA20_POLY1305;
     let mut key = vec![0u8; alg.key_len()];
@@ -67,10 +67,16 @@ static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
 });
 
 /// Content of the encrypted+encoded token that is sent in an authenticate response. The
-/// `user_agent` field is used to mitigate against token theft. It's not a very good one, but can
-/// at least help somewhat. The `email` field is used to ensure that the user that created the
-/// token is still valid. The `exp` field is used to ensure that the token has an expire time (good
-/// practice?) and needs to re-authenticate once in a while.
+/// `user_agent` field is used to mitigate against token theft. It's not a very good check since
+/// the header can easily be faked, but it's at least something. The `email` field is used to
+/// ensure that the user that created the token is still valid. The `exp` field is used to ensure
+/// that the token has an expire time (good practice?) and needs to re-authenticate once in a
+/// while.
+///
+/// If security is more important than convenience (mobile phones can change IP frequently), can
+/// use the L3 source IP address and compare against it. Though according to
+/// https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
+/// this might have issues with the European GDR.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RefreshToken {
     pub user_agent: String,
@@ -82,6 +88,7 @@ pub struct RefreshToken {
 const REFRESH_TOKEN_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
 
 impl RefreshToken {
+
     /// Create a new refresh token.
     fn new(user_agent: &str, email: &str) -> Result<Self, Error> {
         let exp = chrono::Utc::now()
@@ -111,7 +118,6 @@ impl RefreshToken {
             Error::InternalError
         })?;
 
-        // don't need the tag
         REFRESH_TOKEN_KEY
             .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut token)
             .map_err(|_| Error::InternalError)?;
@@ -284,7 +290,6 @@ fn remove_bad_refresh_token(
     Error::WrongCredentialsError
 }
 
-// May want to exchange this for a fixed key depending on circumstances.
 static MY_SECRET: Lazy<[u8; 256]> = Lazy::new(|| {
     let mut a = [0u8; 256];
     rand::thread_rng().fill_bytes(&mut a);
@@ -297,6 +302,10 @@ static DECODING_KEY: Lazy<jsonwebtoken::DecodingKey> =
 static VALIDATION_PARAMS: Lazy<jsonwebtoken::Validation> =
     Lazy::new(|| jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512));
 
+/// Could add this to the access token claims:
+/// https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
+/// but doesn't seem worthwhile considering that the access token is short-lived and should be kept
+/// in memory as opposed to a cookie or sessionStorage / localStorage.
 #[derive(Debug, Deserialize, Serialize)]
 struct Claims {
     email: String,
