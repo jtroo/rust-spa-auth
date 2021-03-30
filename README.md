@@ -65,13 +65,17 @@ cargo run --features dev_cors
 
 - auth rate limit
 - Vue SPA
+  - add this: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-storage-on-client-side
+  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#use-of-custom-request-headers
+  - logout
 - https redirect
 - lets-encrypt
-- users mocked?
 - better logging
 - testing
-- put refresh token in cookie
-- put access token in cookie
+- fix refresh token impl - L3 address is no good
+  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#defense-in-depth-techniques
+  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#cookie-with-__host-prefix
+- add to access token: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
 
 # License
 
