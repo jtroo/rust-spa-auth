@@ -1,12 +1,25 @@
 # Rust SPA + Auth
 
-This project contains a Warp webserver that serves a Vue 2.X single page
-application and has authentication and JWT-based authorization.
+This project contains a Warp webserver that serves a single page application
+and has authentication + JWT-based authorization.
 
 It was written as a learning exercise and can hopefully be a useful example
-for Rust application that needs authentication + authorization.
+for a Rust application that needs authentication + authorization.
+
+I am not a great frontend dev, so do not take the structure of the client side
+code as something to emulate. The file `client/src/api/index.js` is the most
+noteworthy file with regards to using the APIs.
+
+# Dependencies
+
+- A recent version of Rust (MSRV unknown)
+- A recent version of node/npm (minimum unknown)
 
 # Example API Usage
+
+You can check the API functionality without your browser using cURL.
+
+See an example sequence below.
 
 ``` sh
 
@@ -16,7 +29,7 @@ curl -v https://localhost:9090/api/auth/login \
   -H 'Content-Type: application/json'
 
 # result is in set-cookie header:
-# set-cookie: refresh_token=ZzmdZ2jSYzRjRs2y.wYrUBTcHbG++Lr7JEO75xXArDWTNrMb1B6SwDWFFuUPNrA9vBWdfIx9+eBAwAUhpApFTj1eUfV7dlmTHRXAZ7I8RWZMC1iqha67lMjykQ7Wxqw==; Max-Age=2592000; path=/api/auth/access; Secure; HttpOnly; SameSite=Lax;
+# set-cookie: refresh_token=QpOddMUkW9wk/S4B.s/a3k3JttPFH3v4j43gxx7KL+3y05Opm1rjiQBV+07z9NXacLv8PeQn6DRDoblFDerGQ9qeUp1TpaNAg5f1cYtLf3t3xnvGkHUDW2TK/mDJr4A=="; Max-Age=2592000; path=/api/auth/access; Secure; HttpOnly; SameSite=Lax;
 
 
 curl https://localhost:9090/api/auth/access \
@@ -42,11 +55,14 @@ curl https://localhost:9090/api/admin \
 
 ```
 
-# Build to serve the SPA
+# Build to serve the SPA with Rust
 
 ```
 cd $(git rev-parse --show-toplevel)
 ./build-debug.sh
+
+cd build-output
+./rust-spa-auth
 ```
 
 # Serving the SPA and server separately
@@ -68,15 +84,15 @@ cargo run --features dev_cors
 
 # TODOs
 
+- put all password processing on a single thread?
+  - is this a good idea?
+- intercepting of failed reqs to get a new access token
+- clap 3.0 CLI args
 - auth rate limit
-- Vue SPA
-  - add this: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-storage-on-client-side
-  - add this: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html#use-of-custom-request-headers
-  - logout
 - https redirect
 - lets-encrypt
 - better logging
-- testing
+- tests
 
 # License
 

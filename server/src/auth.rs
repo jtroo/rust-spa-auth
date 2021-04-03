@@ -1,5 +1,4 @@
-//! Provides functions for authentication
-//!
+//! Provides functions for authentication and authorization.
 
 use crate::{error::Error, storage};
 use anyhow::anyhow;
@@ -36,18 +35,23 @@ impl Role {
 }
 
 /// Initialize a user and an admin account.
-pub fn init_default_users() -> Result<(), anyhow::Error> {
-    // also initialize the duration in `pretend_password_processing`
+pub fn init_default_users() {
     let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
-    tokio::task::LocalSet::new().block_on(&rt, pretend_password_processing());
-
-    store_user("user@localhost", "userpassword", Role::User)?;
-    store_user("admin@localhost", "adminpassword", Role::Admin)
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        // also initialize the duration in `pretend_password_processing`
+        pretend_password_processing().await;
+        store_user("user@localhost", "userpassword", Role::User).await.expect("could not store default user");
+        store_user("admin@localhost", "adminpassword", Role::Admin).await.expect("could not store default admin");
+    });
 }
 
+#[cfg(all(not(test), not(feature = "dev_cors")))]
 const BCRYPT_COST: u32 = 10;
 
-fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
+#[cfg(any(test, feature = "dev_cors"))]
+const BCRYPT_COST: u32 = 6;
+
+async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
     let hashed_pw = bcrypt::hash(pw, BCRYPT_COST)?;
     STORAGE.store_user(
         storage::User {
@@ -55,7 +59,7 @@ fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyh
             hashed_pw,
             role,
         }
-    ).map_err(|e| anyhow!(e))
+    ).await.map_err(|e| anyhow!(e))
 }
 
 // Need to change this if want session persistence after restarting the binary.
@@ -66,11 +70,11 @@ static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
     aead::LessSafeKey::new(aead::UnboundKey::new(&alg, &key).expect("incorrect ring usage"))
 });
 
-/// Content of the encrypted+encoded token that is sent in an authenticate response. The
+/// Content of the encrypted + encoded token that is sent in an authenticate response. The
 /// `user_agent` field is used to mitigate against token theft. It's not a very good check since
 /// the header can easily be faked, but it's at least something. The `email` field is used to
 /// ensure that the user that created the token is still valid. The `exp` field is used to ensure
-/// that the token has an expire time (good practice?) and needs to re-authenticate once in a
+/// that the token has an expiry time (good practice?) and needs to re-authenticate once in a
 /// while.
 ///
 /// If security is more important than convenience (mobile phones can change IP frequently), can
@@ -84,7 +88,7 @@ pub struct RefreshToken {
     pub exp: i64,
 }
 
-/// 30 days
+/// 30 days in seconds
 const REFRESH_TOKEN_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
 
 impl RefreshToken {
@@ -153,10 +157,10 @@ impl std::str::FromStr for RefreshToken {
     }
 }
 
-fn add_refresh_token(user_agent: &str, email: &str) -> Result<String, Error> {
+async fn add_refresh_token(user_agent: &str, email: &str) -> Result<String, Error> {
     let token = RefreshToken::new(user_agent, email)?;
     let ret = token.encrypt_encode()?;
-    STORAGE.add_refresh_token(token)?;
+    STORAGE.add_refresh_token(token).await?;
     Ok(ret)
 }
 
@@ -174,7 +178,7 @@ pub struct AuthenticateRequest {
 /// claims in an access token can be used by the client-side code to manipulate what the user can
 /// see based on the claims.
 ///
-/// Unlike the access token, the browser has does not need to know what's inside a refresh token -
+/// Unlike the access token, the browser has does not need to know what's inside a refresh token —
 /// they just need to give it back to get their access tokens. Thus this function (mis?)uses
 /// symmetric encryption from `ring::aead`, so that the browser does not know what's inside.
 ///
@@ -195,30 +199,39 @@ pub async fn authenticate(
     user_agent: String,
     req: AuthenticateRequest,
 ) -> Result<(String, i64), Error> {
-    let user = match STORAGE.get_user(&req.email) {
+    let user = match STORAGE.get_user(&req.email).await {
         Some(v) => v,
         None => {
             return Err(pretend_password_processing().await);
         }
     };
-    tokio::task::spawn_blocking(
+
+    // Split up ownership of `email` and `hashed_pw`. The blocking task needs `hashed_pw` and the
+    // verification
+    let email = user.email;
+    let hashed_pw = user.hashed_pw;
+
+    let verification_result = tokio::task::spawn_blocking(
         move || {
-                match bcrypt::verify(&req.pw, &user.hashed_pw).map_err(|e| {
+            match bcrypt::verify(&req.pw, &hashed_pw).map_err(|e| {
                 println!("bcrypt verify err: {}", e);
                 Error::InternalError
             })? {
-                true => Ok(
-                    (
-                        add_refresh_token(&user_agent, &user.email)?,
-                        REFRESH_TOKEN_MAX_AGE_SECS,
-                    )
-                ),
+                true => Ok(()),
                 false => Err(Error::WrongCredentialsError),
-        }
-    }).await.map_err(|e| {
-        println!("tokio err {}", e);
-        Error::InternalError
-    })?
+            }
+        }).await.map_err(|e| {
+            println!("tokio err {}", e);
+            Error::InternalError
+        })?;
+
+    match verification_result {
+        Ok(()) => Ok((
+            add_refresh_token(&user_agent, &email).await?,
+            REFRESH_TOKEN_MAX_AGE_SECS,
+        )),
+        Err(e) => Err(e),
+    }
 }
 
 /// This exists to pretend that a password is being processed in the cases where it's not. This
@@ -247,32 +260,35 @@ async fn pretend_password_processing() -> Error {
 /// The access request includes a refresh token that will only work for the L3 IP and user agent
 /// that originally created the token. If the provided token is used from a different IP or user
 /// agent, then the token will be invalidated.
-pub fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
+pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
     let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
-    if !STORAGE.refresh_token_exists(&refresh_token) {
+    if !STORAGE.refresh_token_exists(&refresh_token).await {
         return Err(Error::WrongCredentialsError);
     }
 
     // remove token if expired
     if refresh_token.exp < chrono::Utc::now().timestamp() {
-        return Err(remove_bad_refresh_token(&refresh_token));
+        return Err(remove_bad_refresh_token(&refresh_token).await);
     }
 
-    // ensure token is used by same user agent and originates from same IP
+    // ensure token is used by same user agent
     if user_agent != refresh_token.user_agent {
         println!(
             "token used by different agent {}, token: {:?}",
             user_agent, &refresh_token
         );
-        return Err(remove_bad_refresh_token(&refresh_token));
+        return Err(remove_bad_refresh_token(&refresh_token).await);
     }
 
-    let user = STORAGE.get_user(&refresh_token.email).ok_or_else(|| {
-        println!("valid token for non-existent email {:?}", refresh_token);
-        remove_bad_refresh_token(&refresh_token)
-    })?;
+    let user = match STORAGE.get_user(&refresh_token.email).await {
+        Some(v) => v,
+        None => {
+            println!("valid token for non-existent email {:?}", refresh_token);
+            return Err(remove_bad_refresh_token(&refresh_token).await);
+        }
+    };
 
     create_jwt(&user).map_err(|e| {
         println!("jwt create err: {}", e);
@@ -280,11 +296,38 @@ pub fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
     })
 }
 
+/// Revokes the refresh token provided. This is done regardless of the security validations,
+/// because if the security validations fail then the user is compromised anyway and the token
+/// **should** be revoked.
+pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> {
+    let refresh_token = RefreshToken::from_str(refresh_token)?;
+    // remove token if expired
+    if refresh_token.exp < chrono::Utc::now().timestamp() {
+        return Err(remove_bad_refresh_token(&refresh_token).await);
+    }
+
+    // ensure token is used by same user agent
+    if user_agent != refresh_token.user_agent {
+        println!(
+            "token used by different agent {}, token: {:?}",
+            user_agent, &refresh_token
+        );
+        return Err(remove_bad_refresh_token(&refresh_token).await);
+    }
+
+    if STORAGE.get_user(&refresh_token.email).await.is_none() {
+        println!("valid token for non-existent email {:?}", refresh_token);
+        return Err(remove_bad_refresh_token(&refresh_token).await);
+    };
+
+    STORAGE.remove_refresh_token(&refresh_token).await
+}
+
 /// Remove a bad refresh token from the set of known tokens.
-fn remove_bad_refresh_token(
+async fn remove_bad_refresh_token(
     token: &RefreshToken,
 ) -> Error {
-    if let Err(e) = STORAGE.remove_refresh_token(token) {
+    if let Err(e) = STORAGE.remove_refresh_token(token).await {
         return e;
     }
     Error::WrongCredentialsError

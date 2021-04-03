@@ -8,10 +8,10 @@ fn main() {
     println!("rust spa auth starting");
 
     println!("preparing default users");
-    auth::init_default_users().expect("Users could not initialize");
+    auth::init_default_users();
 
     println!("creating routes");
-    let login_api = warp::path!("auth"/"login")
+    let login_api = warp::path!("login")
         .and(warp::post())
         .and(filters::header::header::<String>("user-agent"))
         .and(warp::body::json())
@@ -23,29 +23,51 @@ fn main() {
         .and(filters::cookie::cookie("refresh_token"))
         .and_then(access_handler);
 
-    let user_route = warp::path!("user")
+    let logout_api = warp::path!("auth"/"logout")
+        .and(warp::post())
+        .and(filters::header::header::<String>("user-agent"))
+        .and(filters::cookie::cookie("refresh_token"))
+        .and_then(logout_handler);
+
+    let user_api = warp::path!("user")
         .and(with_auth(auth::Role::User))
         .and_then(user_handler);
-    let admin_route = warp::path!("admin")
+
+    let admin_api = warp::path!("admin")
         .and(with_auth(auth::Role::Admin))
         .and_then(admin_handler);
 
     // Note - warp::path is **not** the macro! The macro version would terminate path checking at
-    // "api" as opposed to being a prefix for the other handlers.
-    let api_routes = warp::path("api").and(
-        access_api
-        .or(login_api)
-        .or(user_route)
-        .or(admin_route)
-        .recover(error::handle_rejection)
-    );
+    // "api" as opposed to being a prefix for the other handlers. This puzzled me for longer than I
+    // would have liked. ☹
+    let api_routes = warp::path("api")
+        .and(
+            access_api
+                .or(login_api)
+                .or(user_api)
+                .or(admin_api)
+                .or(logout_api)
+                .recover(error::handle_rejection)
+        );
+
+    // This is here to stop unused variable warning
+    #[cfg(not(feature = "dev_cors"))]
+    let port = 8080;
 
     #[cfg(feature = "dev_cors")]
-    let api_routes = {
+    let (port, api_routes) = {
         const ORIGIN: &str = "http://localhost:8080";
         println!("allowing CORS for development, origin: {}", ORIGIN);
-        api_routes
-            .with(warp::cors().allow_origin(ORIGIN))
+        (
+            9090,
+            api_routes
+                .with(warp::cors()
+                    .allow_origin(ORIGIN)
+                    .allow_methods(vec!["GET", "PUT", "POST", "DELETE"])
+                    .allow_headers(vec!["content-type", "user-agent", "authorization"])
+                    .allow_credentials(true)
+            ),
+        )
     };
 
     const WEB_APP_DIR: &str = "./public";
@@ -62,12 +84,13 @@ fn main() {
         .build()
         .expect("runtime should start")
         .block_on(async {
-        warp::serve(routes)
-            .tls()
-                .key_path("tls/server.rsa.key")
-                .cert_path("tls/server.rsa.crt")
-                .run(([127, 0, 0, 1], 9090)).await;
-        });
+            warp::serve(routes)
+                .tls()
+                    .key_path("tls/server.rsa.key")
+                    .cert_path("tls/server.rsa.crt")
+                    .run(([0, 0, 0, 0], port)).await;
+            }
+        );
 }
 
 /// Used to authenticate with a password and retrieve a refresh token.
@@ -77,13 +100,13 @@ async fn login_handler(
 ) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(auth::authenticate(user_agent, req).await
         .map(|(token, max_age)| {
-            const SECURITY_HEADERS: &str = "Secure; HttpOnly; SameSite=Lax;";
+            const SECURITY_FLAGS: &str = "Secure; HttpOnly; SameSite=Lax;";
             warp::http::Response::builder()
                 .header(
                     "set-cookie",
                     &format!(
-                        "refresh_token={}; Max-Age={}; path=/api/auth/access; {}",
-                        token, max_age, SECURITY_HEADERS
+                        "refresh_token={}; Max-Age={}; Path=/api/auth; {}",
+                        token, max_age, SECURITY_FLAGS
                     ),
                 )
                 .body("success")
@@ -96,9 +119,21 @@ async fn access_handler(
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::access(&user_agent, &refresh_token)
-        .map(|token| warp::http::Response::builder().body(token))?
+    Ok(
+        auth::access(&user_agent, &refresh_token)
+            .await
+            .map(|token| warp::http::Response::builder().body(token))?
     )
+}
+
+/// Used to get a new access token using a refresh token
+async fn logout_handler(
+    user_agent: String,
+    refresh_token: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    // ignore result, always reply with 200
+    let _ = auth::logout(&user_agent, &refresh_token).await;
+    Ok(warp::reply())
 }
 
 /// Returns a filter that checks if the request is authorized based on the `required_role`
