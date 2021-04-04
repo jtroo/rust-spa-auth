@@ -10,6 +10,18 @@ a Rust-backed website that needs authentication + authorization.
 
 ![Demo video](https://user-images.githubusercontent.com/6634136/113497053-c2505200-94b4-11eb-8010-27a132a010e9.mp4)
 
+# Dependencies
+
+- A recent version of Rust+Cargo (MSRV unknown)
+- A recent version of npm (minimum unknown)
+
+## Note regarding Warp
+
+If you check [Cargo.toml](server/Cargo.toml), you'll see that the `warp`
+dependency is my personal warp fork. This is due to waiting on [my
+PR](https://github.com/seanmonstar/warp/pull/827) for more convenient rejection
+handling to be merged.
+
 # Notable content
 
 ## Server
@@ -20,7 +32,7 @@ a Rust-backed website that needs authentication + authorization.
   - [algorithm](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
     should be easy enough to change if desired
 - Authorization using 2 simple roles using JWT to validate claims
-- [Optional CORS](#serve-the-spa-separately) for more rapid client side development - see
+- [Optional CORS](#serve-the-spa-separately) for more rapid client side development
 - Example for abstracting a data store with a trait
   - In-memory implementation exists
 
@@ -37,16 +49,6 @@ I am not the most procient client-side dev, so the structure of the client side
 code may not be what you want to emulate. The [API requests using
 axios](client/src/api/index.js) are probably the most useful to look at with
 regards to using the server APIs.
-
-
-# Dependencies
-
-- A recent version of Rust+Cargo (MSRV unknown)
-- A recent version of npm (minimum unknown)
-
-If you check the [Cargo.toml](server/Cargo.toml), you'll see that the `warp`
-dependency is on my personal warp fork. This is due to waiting on [my
-PR](https://github.com/seanmonstar/warp/pull/827) to be merged.
 
 # Note on server framework / async runtime
 
@@ -65,6 +67,32 @@ Instances of tokio reliance:
 - `init_default_users`: uses `block_on` to run async code in a sync function
 - `authenticate`: spawns a blocking task to run bcrypt verification
 - `pretend_password_processing`: uses tokio sleep
+
+# Serve the SPA with Rust
+
+```
+cd $(git rev-parse --show-toplevel)
+./build-debug.sh
+cd build-output
+./rust-spa-auth
+```
+
+# Serve the SPA separately
+
+To serve the SPA and the server separately for more rapid client side code
+development, you can use the following commands:
+
+serve client files:
+``` sh
+cd $(git rev-parse --show-toplevel)/client
+npm run serve
+```
+
+run server
+``` sh
+cd $(git rev-parse --show-toplevel)/server
+cargo run --features dev_cors
+```
 
 # Example API Usage
 
@@ -109,32 +137,6 @@ curl https://localhost:9090/api/auth/logout \
   --cacert tls/server.rsa.crt \
   --cookie "refresh_token=QpOddMUkW9wk/S4B.s/a3k3JttPFH3v4j43gxx7KL+3y05Opm1rjiQBV+07z9NXacLv8PeQn6DRDoblFDerGQ9qeUp1TpaNAg5f1cYtLf3t3xnvGkHUDW2TK/mDJr4A=="
 
-```
-
-# Serve the SPA with Rust
-
-```
-cd $(git rev-parse --show-toplevel)
-./build-debug.sh
-cd build-output
-./rust-spa-auth
-```
-
-# Serve the SPA separately
-
-To serve the SPA and the server separately for more rapid client side code
-development, you can use the following commands:
-
-serve client files:
-``` sh
-cd $(git rev-parse --show-toplevel)/client
-npm run serve
-```
-
-run server
-``` sh
-cd $(git rev-parse --show-toplevel)/server
-cargo run --features dev_cors
 ```
 
 # Potential changes/additions
