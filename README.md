@@ -24,16 +24,15 @@ APIs.
 
 # Note on async runtime
 
-Since the webserver uses Warp, the code runs on the tokio runtime. Apart from
-the code related to the Warp webserver though, the `auth` module has a few
-instances where it is reliant on tokio. These are pretty minimal so I think it
-would be relatively simple to adapt the `auth` module for webservers with
-another runtime, e.g. Tide.
+Since the webserver uses Warp, the code uses on the tokio runtime. Apart from
+the Warp related code, the `auth` module has a few instances where it is
+reliant on tokio. These are pretty minimal so it should be simple to adapt for
+webservers with another runtime, e.g.  Tide.
 
 Instances of tokio reliance:
 
-- `init_default_users`: uses `block_on` to run async code in a sync function.
-- `authenticate`: spawns a blocking task to run bcrypt verification. Can make
+- `init_default_users`: uses `block_on` to run async code in a sync function
+- `authenticate`: spawns a blocking task to run bcrypt verification
 - `pretend_password_processing`: uses tokio sleep
 
 # Example API Usage
