@@ -4,7 +4,14 @@ This project contains a Rust server that serves a single page application and
 has authentication + JWT-based authorization.
 
 It was written as a learning exercise and can hopefully be a useful example for
-a Rust-backed website that needs authentication + authorization.
+a Rust-backed website that uses authentication + authorization. It's a bit more
+complete and closer to prodution-ready than other example code I've seen
+online, e.g. [JWT with warp](#special-mentions).
+
+## Warning
+
+Though I am somewhat informed, I am not a security expert. Don't deploy this
+code to production.
 
 # Demo
 
@@ -31,7 +38,7 @@ handling to be merged.
   - currently uses bcrypt for no particular reason
   - [algorithm](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
     should be easy enough to change if desired
-- Authorization using 2 simple roles using JWT to validate claims
+- Authorization with 2 basic roles using JWT to validate claims
 - [Optional CORS](#serve-the-spa-separately) for more rapid client side development
 - Example for abstracting a data store with a trait
   - In-memory implementation exists
@@ -50,10 +57,10 @@ code may not be what you want to emulate. The [API requests using
 axios](client/src/api/index.js) are probably the most useful to look at with
 regards to using the server APIs.
 
-# Note on server framework / async runtime
+# Note on server framework and async runtime
 
 The authorization code is hopefully not closely tied to Warp framework details
-— most of the Warp-specific code is in `main.rs`, with a sprinkle in
+— most of the Warp-specific code is in `main.rs` with a sprinkle in
 `error.rs`. As long as the server framework used is async capable, the auth
 code should be a decent starting point for use with other server frameworks.
 
@@ -65,7 +72,7 @@ webservers with another runtime, e.g. [Tide](https://crates.io/crates/tide).
 Instances of tokio reliance:
 
 - `init_default_users`: uses `block_on` to run async code in a sync function
-- `authenticate`: spawns a blocking task to run bcrypt verification
+- `authenticate`: spawns a blocking task to run password verification
 - `pretend_password_processing`: uses tokio sleep
 
 # Serve the SPA with Rust
@@ -82,13 +89,13 @@ cd build-output
 To serve the SPA and the server separately for more rapid client side code
 development, you can use the following commands:
 
-serve client files:
+Serve client files:
 ``` sh
 cd $(git rev-parse --show-toplevel)/client
 npm run serve
 ```
 
-run server
+Run server:
 ``` sh
 cd $(git rev-parse --show-toplevel)/server
 cargo run --features dev_cors
@@ -149,12 +156,20 @@ curl https://localhost:9090/api/auth/logout \
   - is this a good idea?
 - change password hashing fn to [argon2](https://crates.io/crates/argon2)
   - note that the linked argon2 crate is newer / less downloaded than another
-    argon2 rate on crates.io, but is part of RustCrypto so seems more
+    argon2 rate on crates.io, but is part of RustCrypto so seems like a better
+    bet
 - clap 3.0 CLI args
 - lets-encrypt certificates
 - better logging
-- use a [crypto implementation crate](https://github.com/RustCrypto/AEADs)
+- use an [AEAD implementation crate](https://github.com/RustCrypto/AEADs)
   directly instead of ring
+
+# Special mentions
+
+These sources were useful starting points.
+
+- [Hosting SPA with Warp](https://freiguy1.gitlab.io/posts/hosting-spa-with-warp.html)
+- [JWT authentication with Warp](https://blog.logrocket.com/jwt-authentication-in-rust/)
 
 # License
 
