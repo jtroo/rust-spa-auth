@@ -11,6 +11,7 @@ fn main() {
     auth::init_default_users();
 
     println!("creating routes");
+
     let login_api = warp::path!("login")
         .and(warp::post())
         .and(filters::header::header::<String>("user-agent"))

@@ -1,3 +1,7 @@
+//! Custom errors that can be turned into Warp `Rejection`s.
+//!
+//! Also exposes `handle_rejection` which can be used to ensure all rejections become replies.
+
 use serde::Serialize;
 use thiserror::Error;
 use warp::{Rejection, Reply, http::StatusCode};

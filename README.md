@@ -14,13 +14,13 @@ APIs.
 
 # Demo
 
-![Demo video](https://user-images.githubusercontent.com/6634136/113496411-2d4a5a80-94ae-11eb-9820-fae0b6482d53.mp4)
+![Demo video](https://user-images.githubusercontent.com/6634136/113497053-c2505200-94b4-11eb-8010-27a132a010e9.mp4)
 
 
 # Dependencies
 
-- A recent version of Rust (MSRV unknown)
-- A recent version of node/npm (minimum unknown)
+- A recent version of Rust+Cargo (MSRV unknown)
+- A recent version of npm (minimum unknown)
 
 # Note on async runtime
 
@@ -44,7 +44,7 @@ See an example sequence below.
 
 ``` sh
 
-curl -v https://localhost:9090/api/auth/login \
+curl -v https://localhost:9090/api/login \
   --cacert tls/server.rsa.crt \
   -d '{"email": "user@localhost", "pw": "userpassword"}' \
   -H 'Content-Type: application/json'
@@ -72,7 +72,12 @@ curl https://localhost:9090/api/admin \
   -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJlbWFpbCI6InVzZXJAbG9jYWxob3N0Iiwicm9sZSI6InVzZXIiLCJleHAiOjE2MTcwNjUxMDJ9.imixaRk8YgoEv8Hh33qidty_jGBAo9ewIOd7vWqAjAHiN-MZJOFeSXg25nWx86SW9Pc_QFH_qlFYaSmPG_MfRA'
 
 # result:
-# {"message":"no permission","status":"401 Unauthorized"}⏎
+# {"message":"no permission","status":"403 Forbidden"}⏎
+
+curl https://localhost:9090/api/auth/logout \
+  -X POST \
+  --cacert tls/server.rsa.crt \
+  --cookie "refresh_token=QpOddMUkW9wk/S4B.s/a3k3JttPFH3v4j43gxx7KL+3y05Opm1rjiQBV+07z9NXacLv8PeQn6DRDoblFDerGQ9qeUp1TpaNAg5f1cYtLf3t3xnvGkHUDW2TK/mDJr4A=="
 
 ```
 
