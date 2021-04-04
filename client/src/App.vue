@@ -51,7 +51,6 @@ export default {
   methods: {
     async logout() {
       await api.logout();
-      this.$router.push('/login');
     }
   },
 

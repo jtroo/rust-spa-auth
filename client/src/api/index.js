@@ -1,8 +1,14 @@
 import axios from 'axios';
 import jwt_decode from 'jwt-decode';
+import router from '@/router';
 
 let { hostname, port } = window.location;
 
+// shared access token for all APIs
+let accessToken = null;
+let tokenClaims = {};
+
+// change parameters for development since it uses CORS
 if (process.env.NODE_ENV !== 'production') {
   port = 9090;
   axios.defaults.withCredentials = true;
@@ -10,9 +16,85 @@ if (process.env.NODE_ENV !== 'production') {
 
 axios.defaults.baseURL = `https://${hostname}:${port}`;
 
-// shared access token for all APIs
-let accessToken = null;
-let tokenClaims = {};
+/**
+ * Request an access token and stores it in the file variable `accessToken`.
+ *
+ * @param {bool} force - Set true if a brand new access token should be
+ *   requested rather than using the currently saved one.
+ * @returns {Promise<null>}
+ */
+function getAccessToken(force) {
+  // If an access token already exists, do nothing.
+  if (accessToken && !force) {
+    return new Promise((resolve) => resolve(null));
+  }
+
+  return axios({
+    method: 'get',
+    url: `/api/auth/access`,
+  }).then((result) => {
+    accessToken = result.data;
+    tokenClaims = jwt_decode(result.data) || {};
+    return null;
+  });
+}
+
+/**
+ * Log out of the system
+ * @returns {Promise<null>}
+ */
+function doLogout() {
+  return axios({
+    method: 'post',
+    url: `/api/auth/logout`,
+  }).then(() => {
+    accessToken = '';
+    tokenClaims = {};
+    router.push('/login').catch((e) => {
+      if (e.name != 'NavigationDuplicated') {
+        throw e;
+      }
+    });
+    return null;
+  });
+}
+
+axios.interceptors.request.use(
+  (config) => {
+    if (!config.url.startsWith('/api/auth/')) {
+      // Add authorization header for non-auth related APIs
+      config.headers.authorization = `Bearer ${accessToken}`;
+    }
+    return config;
+  },
+  null,
+);
+
+axios.interceptors.response.use(
+  null,
+  async (e) => {
+    // Rethrow any non-authorization errors
+    if (!e.response || e.response.status !== 403) {
+      throw e;
+    }
+
+    const { config } = e;
+
+    // If the original request was related to authorization already, logout and exit early.
+    if (config.url.startsWith('/api/auth/')) {
+      await doLogout();
+      throw e;
+    }
+
+    // Get the new access token
+    await getAccessToken(true);
+
+    // Resend the original request. Wrap in try/catch so that it only tries
+    // once and does not keep repeating.
+    return await axios.request(config);
+  },
+  { synchronous: true },
+);
 
 export default {
   /**
@@ -28,23 +110,11 @@ export default {
   },
 
   /**
-   * Gain an access token.
+   * Request API access.
    * @returns {Promise<null>}
    */
   access() {
-    // If an access token already exists, do nothing.
-    if (accessToken) {
-      return new Promise((resolve) => resolve(null));
-    }
-
-    return axios({
-      method: 'get',
-      url: `/api/auth/access`,
-    }).then((result) => {
-      accessToken = result.data;
-      tokenClaims = jwt_decode(result.data) || {};
-      return null;
-    });
+    return getAccessToken();
   },
 
   /**
@@ -67,9 +137,6 @@ export default {
     return axios({
       method: 'post',
       url: `/api/user`,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      }
     }).then((resp) => resp.data);
   },
 
@@ -81,9 +148,6 @@ export default {
     return axios({
       method: 'post',
       url: `/api/admin`,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      }
     }).then((resp) => resp.data);
   },
 
@@ -103,13 +167,6 @@ export default {
    * @returns {Promise<null>}
    */
   logout() {
-    return axios({
-      method: 'post',
-      url: `/api/auth/logout`,
-    }).then(() => {
-      accessToken = '';
-      tokenClaims = {};
-      return null;
-    });
+    doLogout();
   }
 }
