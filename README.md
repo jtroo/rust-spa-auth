@@ -12,6 +12,11 @@ probably the most noteworthy file with regards to using the server APIs. It
 makes use of the [axios library](https://www.npmjs.com/package/axios) to call
 APIs.
 
+# Demo
+
+![Demo video](https://user-images.githubusercontent.com/6634136/113496411-2d4a5a80-94ae-11eb-9820-fae0b6482d53.mp4)
+
+
 # Dependencies
 
 - A recent version of Rust (MSRV unknown)
