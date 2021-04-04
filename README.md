@@ -6,14 +6,30 @@ and has authentication + JWT-based authorization.
 It was written as a learning exercise and can hopefully be a useful example
 for a Rust application that needs authentication + authorization.
 
-I am not a great frontend dev, so do not take the structure of the client side
-code as something to emulate. The file `client/src/api/index.js` is the most
-noteworthy file with regards to using the APIs.
+I am not the most procient client-side dev, so the structure of the client side
+code may not be what you want to emulate. The file `client/src/api/index.js` is
+probably the most noteworthy file with regards to using the server APIs. It
+makes use of the [axios library](https://www.npmjs.com/package/axios) to call
+APIs.
 
 # Dependencies
 
 - A recent version of Rust (MSRV unknown)
 - A recent version of node/npm (minimum unknown)
+
+# Note on async runtime
+
+Since the webserver uses Warp, the code runs on the tokio runtime. Apart from
+the code related to the Warp webserver though, the `auth` module has a few
+instances where it is reliant on tokio. These are pretty minimal so I think it
+would be relatively simple to adapt the `auth` module for webservers with
+another runtime, e.g. Tide.
+
+Instances of tokio reliance:
+
+- `init_default_users`: uses `block_on` to run async code in a sync function.
+- `authenticate`: spawns a blocking task to run bcrypt verification. Can make
+- `pretend_password_processing`: uses tokio sleep
 
 # Example API Usage
 
@@ -55,20 +71,19 @@ curl https://localhost:9090/api/admin \
 
 ```
 
-# Build to serve the SPA with Rust
+# Serve the SPA with Rust
 
 ```
 cd $(git rev-parse --show-toplevel)
 ./build-debug.sh
-
 cd build-output
 ./rust-spa-auth
 ```
 
-# Serving the SPA and server separately
+# Serve the SPA separately
 
-To serve the SPA and the server separately for more rapid client side code development, you can
-use the following commands:
+To serve the SPA and the server separately for more rapid client side code
+development, you can use the following commands:
 
 serve client files:
 ``` sh
@@ -82,11 +97,10 @@ cd $(git rev-parse --show-toplevel)/server
 cargo run --features dev_cors
 ```
 
-# TODOs
+# Potential additions
 
 - put all password processing on a single thread?
   - is this a good idea?
-- intercepting of failed reqs to get a new access token
 - clap 3.0 CLI args
 - auth rate limit
 - https redirect

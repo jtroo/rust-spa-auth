@@ -237,9 +237,9 @@ pub async fn authenticate(
 
 /// This exists to pretend that a password is being processed in the cases where it's not. This
 /// makes it harder to guess if a malicious request got an existing email with non-matching
-/// password, vs. an email that does not exist.
+/// password vs. an email that does not exist.
 ///
-/// There is currently a bug - on the first time this function is called, the delay is a lot longer
+/// There is currently a bug: on the first time this function is called, the delay is a lot longer
 /// than on every other call. A workaround is to call this function at some point during
 /// initialization. I'm too `Lazy` to fix it, so it's called in `init_default_users` to do the
 /// workaround.

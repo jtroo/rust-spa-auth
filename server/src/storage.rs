@@ -37,8 +37,8 @@ pub trait Storage {
     async fn remove_refresh_token(&self, token: &auth::RefreshToken) -> Result<(), Error>;
 }
 
-// None of these functions are actually async. Could have use tokio's async locks, but if the
-// critical sections are short (which these should be), then it is suggested to use blocking locks.
+// None of these functions are actually async. Could have use async locks, but if the critical
+// sections are short (which these should be), then it is suggested to use blocking locks.
 //
 // See:
 // https://docs.rs/tokio/1.4.0/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use

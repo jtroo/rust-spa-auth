@@ -53,7 +53,7 @@ fn main() {
     // This is here to stop unused variable warning, since with the feature `dev_cors` enabled, the
     // port is reassigned without use.
     #[cfg(not(feature = "dev_cors"))]
-    let port = 80;
+    let port = 443;
 
     #[cfg(feature = "dev_cors")]
     let (port, api_routes) = {
