@@ -18,6 +18,10 @@ fn main() {
         .and(warp::body::json())
         .and_then(login_handler);
 
+    // The `access` and `logout` routes have the `auth` prefix because these are the only two
+    // routes that require the `refresh_token` cookie. These get a unique prefix so that the cookie
+    // can use a more specific path and won't be sent for unnecessary routes.
+
     let access_api = warp::path!("auth"/"access")
         .and(warp::get())
         .and(filters::header::header::<String>("user-agent"))
@@ -38,9 +42,12 @@ fn main() {
         .and(with_auth(auth::Role::Admin))
         .and_then(admin_handler);
 
-    // Note - warp::path is **not** the macro! The macro version would terminate path checking at
+    // Note: warp::path is **not** the macro! The macro version would terminate path checking at
     // "api" as opposed to being a prefix for the other handlers. This puzzled me for longer than I
     // would have liked. ☹
+    //
+    // This "api" prefix is used so that API handlers' rejections can all be turned into replies by
+    // `error::handle_rejection`. This is needed so that they don't fall back to the SPA handlers.
     let api_routes = warp::path("api")
         .and(
             access_api
@@ -51,8 +58,8 @@ fn main() {
                 .recover(error::handle_rejection)
         );
 
-    // This is here to stop unused variable warning, since with the feature `dev_cors` enabled, the
-    // port is reassigned without use.
+    // This is here to stop an unused variable warning, since with the feature `dev_cors` enabled,
+    // the port is reassigned without use.
     #[cfg(not(feature = "dev_cors"))]
     let port = 443;
 
@@ -100,16 +107,12 @@ async fn login_handler(
     user_agent: String,
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::authenticate(user_agent, req).await
-        .map(|(token, max_age)| {
-            const SECURITY_FLAGS: &str = "Secure; HttpOnly; SameSite=Lax;";
+    Ok(auth::authenticate(&user_agent, "/api/auth", req).await
+        .map(|cookie| {
             warp::http::Response::builder()
                 .header(
                     "set-cookie",
-                    &format!(
-                        "refresh_token={}; Max-Age={}; Path=/api/auth; {}",
-                        token, max_age, SECURITY_FLAGS
-                    ),
+                    &cookie,
                 )
                 .body("success")
         })?

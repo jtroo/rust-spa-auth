@@ -1,20 +1,42 @@
 # Rust SPA + Auth
 
-This project contains a Warp webserver that serves a single page application
-and has authentication + JWT-based authorization.
+This project contains a Rust server that serves a single page application and
+has authentication + JWT-based authorization.
 
-It was written as a learning exercise and can hopefully be a useful example
-for a Rust application that needs authentication + authorization.
-
-I am not the most procient client-side dev, so the structure of the client side
-code may not be what you want to emulate. The file `client/src/api/index.js` is
-probably the most noteworthy file with regards to using the server APIs. It
-makes use of the [axios library](https://www.npmjs.com/package/axios) to call
-APIs.
+It was written as a learning exercise and can hopefully be a useful example for
+a Rust-backed website that needs authentication + authorization.
 
 # Demo
 
 ![Demo video](https://user-images.githubusercontent.com/6634136/113497053-c2505200-94b4-11eb-8010-27a132a010e9.mp4)
+
+# Notable content
+
+## Server
+
+- Rust with a [Warp web server](https://crates.io/crates/warp)
+- Authentication using password hashing
+  - currently uses bcrypt for no particular reason
+  - [algorithm](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+    should be easy enough to change if desired
+- Authorization using 2 simple roles using JWT to validate claims
+- [Optional CORS](#serve-the-spa-separately) for more rapid client side development - see
+- Example for abstracting a data store with a trait
+  - In-memory implementation exists
+
+## Client
+
+- [Vue 2.X](https://vuejs.org/) framework
+- [Axios](https://www.npmjs.com/package/axios) for API requests
+- Login
+- Logout
+- Conditionally visible UI components based on JWT claims
+- Automatic refreshing of access tokens on 403 error
+
+I am not the most procient client-side dev, so the structure of the client side
+code may not be what you want to emulate. The [API requests using
+axios](client/src/api/index.js) are probably the most useful to look at with
+regards to using the server APIs.
 
 
 # Dependencies
@@ -22,12 +44,21 @@ APIs.
 - A recent version of Rust+Cargo (MSRV unknown)
 - A recent version of npm (minimum unknown)
 
-# Note on async runtime
+If you check the [Cargo.toml](server/Cargo.toml), you'll see that the `warp`
+dependency is on my personal warp fork. This is due to waiting on [my
+PR](https://github.com/seanmonstar/warp/pull/827) to be merged.
+
+# Note on server framework / async runtime
+
+The authorization code is hopefully not closely tied to Warp framework details
+— most of the Warp-specific code is in `main.rs`, with a sprinkle in
+`error.rs`. As long as the server framework used is async capable, the auth
+code should be a decent starting point for use with other server frameworks.
 
 Since the webserver uses Warp, the code uses on the tokio runtime. Apart from
 the Warp related code, the `auth` module has a few instances where it is
 reliant on tokio. These are pretty minimal so it should be simple to adapt for
-webservers with another runtime, e.g.  Tide.
+webservers with another runtime, e.g. [Tide](https://crates.io/crates/tide).
 
 Instances of tokio reliance:
 
@@ -106,16 +137,22 @@ cd $(git rev-parse --show-toplevel)/server
 cargo run --features dev_cors
 ```
 
-# Potential additions
+# Potential changes/additions
 
+- tests
+- auth rate limit
+- http to https redirect
+- delete the cookie on the client on logout
 - put all password processing on a single thread?
   - is this a good idea?
+- change password hashing fn to [argon2](https://crates.io/crates/argon2)
+  - note that the linked argon2 crate is newer / less downloaded than another
+    argon2 rate on crates.io, but is part of RustCrypto so seems more
 - clap 3.0 CLI args
-- auth rate limit
-- https redirect
-- lets-encrypt
+- lets-encrypt certificates
 - better logging
-- tests
+- use a [crypto implementation crate](https://github.com/RustCrypto/AEADs)
+  directly instead of ring
 
 # License
 

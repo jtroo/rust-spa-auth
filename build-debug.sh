@@ -41,3 +41,8 @@ echo
 echo "To run:"
 echo "cd $GITROOT/build-output; ./rust-spa-auth"
 echo
+echo "The above command may need sudo to succeed."
+echo
+echo "See the thread below for the implications regarding this issue:"
+echo "https://superuser.com/questions/710253/allow-non-root-process-to-bind-to-port-80-and-443"
+echo

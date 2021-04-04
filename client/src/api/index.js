@@ -1,3 +1,8 @@
+/*
+
+API request library.
+
+ */
 import axios from 'axios';
 import jwt_decode from 'jwt-decode';
 import router from '@/router';
@@ -61,7 +66,7 @@ function doLogout() {
 
 axios.interceptors.request.use(
   (config) => {
-    if (!config.url.startsWith('/api/auth/')) {
+    if (!config.url.startsWith('/api/auth/') && config.url !== '/api/login') {
       // Add authorization header for non-auth related APIs
       config.headers.authorization = `Bearer ${accessToken}`;
     }
@@ -125,8 +130,8 @@ export default {
   getErrorMsg(e) {
     // e.response.data.msg is for custom rejections
     // e.response.data is for default Warp rejections
-    // e.message is the default standard error message for the error code
-    return e.response && e.response.data.msg || e.response.data || e.message;
+    // e.message is the default error message for the error code
+    return e.response && (e.response.data.msg || e.response.data) || e.message;
   },
 
   /**

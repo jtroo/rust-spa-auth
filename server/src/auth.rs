@@ -18,7 +18,7 @@ pub enum Role {
 }
 
 impl Role {
-    // Doesn't use std::str::FromStr since that requires a Result and this is infallible.
+    // Doesn't use std::str::FromStr since the trait impl returns a Result and this is infallible.
     fn from_str(role: &str) -> Self {
         match role {
             "admin" => Self::Admin,
@@ -32,17 +32,6 @@ impl Role {
             Self::User => "user",
         }
     }
-}
-
-/// Initialize a user and an admin account.
-pub fn init_default_users() {
-    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
-    tokio::task::LocalSet::new().block_on(&rt, async {
-        // also initialize the duration in `pretend_password_processing`
-        pretend_password_processing().await;
-        store_user("user@localhost", "userpassword", Role::User).await.expect("could not store default user");
-        store_user("admin@localhost", "adminpassword", Role::Admin).await.expect("could not store default admin");
-    });
 }
 
 #[cfg(all(not(test), not(feature = "dev_cors")))]
@@ -63,7 +52,18 @@ async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<()
     ).await.map_err(|e| anyhow!(e))
 }
 
-// Need to change this if want session persistence after restarting the binary.
+/// Initialize a user and an admin account. Panics if it cannot run.
+pub fn init_default_users() {
+    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        // also initialize the duration in `pretend_password_processing`
+        pretend_password_processing().await;
+        store_user("user@localhost", "userpassword", Role::User).await.expect("could not store default user");
+        store_user("admin@localhost", "adminpassword", Role::Admin).await.expect("could not store default admin");
+    });
+}
+
+// Need to change this if refresh token persistence is desired after restarting the binary.
 static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
     let alg = &aead::CHACHA20_POLY1305;
     let mut key = vec![0u8; alg.key_len()];
@@ -81,7 +81,7 @@ static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
 /// If security is more important than convenience (mobile phones can change IP frequently), can
 /// use the L3 source IP address and compare against it. Though according to
 /// https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
-/// this might have issues with the European GDR.
+/// this might have issues with the European GDPR.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RefreshToken {
     pub user_agent: String,
@@ -93,7 +93,6 @@ pub struct RefreshToken {
 const REFRESH_TOKEN_MAX_AGE_SECS: i64 = 30 * 24 * 60 * 60;
 
 impl RefreshToken {
-
     /// Create a new refresh token.
     fn new(user_agent: &str, email: &str) -> Result<Self, Error> {
         let exp = chrono::Utc::now()
@@ -158,6 +157,8 @@ impl std::str::FromStr for RefreshToken {
     }
 }
 
+/// Add a new refresh token to the data store, returning its `String` representation for saving on
+/// the client side on success.
 async fn add_refresh_token(user_agent: &str, email: &str) -> Result<String, Error> {
     let token = RefreshToken::new(user_agent, email)?;
     let ret = token.encrypt_encode()?;
@@ -171,7 +172,7 @@ pub struct AuthenticateRequest {
     pub pw: String,
 }
 
-/// On success, returns a refresh token that can be used to get access tokens.
+/// On success, returns a refresh token cookie string that can be used to get access tokens.
 ///
 /// The refresh token is opaque and should only be able to be read by this server.
 ///
@@ -197,9 +198,10 @@ pub struct AuthenticateRequest {
 /// because network comms should be encrypted via https. In addition, token theft is mitigated by
 /// checking the request's L3 source IP and the user agent header in the `access` function.
 pub async fn authenticate(
-    user_agent: String,
+    user_agent: &str,
+    cookie_path: &str,
     req: AuthenticateRequest,
-) -> Result<(String, i64), Error> {
+) -> Result<String, Error> {
     let user = match STORAGE.get_user(&req.email).await {
         Some(v) => v,
         None => {
@@ -208,10 +210,11 @@ pub async fn authenticate(
     };
 
     // Split up ownership of `email` and `hashed_pw`. The blocking task needs `hashed_pw` and the
-    // verification
+    // verification needs `email`.
     let email = user.email;
     let hashed_pw = user.hashed_pw;
 
+    // Password verification is done in a blocking task because it is CPU intensive.
     let verification_result = tokio::task::spawn_blocking(
         move || {
             match bcrypt::verify(&req.pw, &hashed_pw).map_err(|e| {
@@ -226,11 +229,17 @@ pub async fn authenticate(
             Error::InternalError
         })?;
 
+    const SECURITY_FLAGS: &str = "Secure; HttpOnly; SameSite=Lax;";
+
     match verification_result {
-        Ok(()) => Ok((
-            add_refresh_token(&user_agent, &email).await?,
-            REFRESH_TOKEN_MAX_AGE_SECS,
-        )),
+        Ok(()) => Ok(format!(
+                "refresh_token={}; Path={}; Max-Age={}; {}",
+                add_refresh_token(&user_agent, &email).await?,
+                cookie_path,
+                REFRESH_TOKEN_MAX_AGE_SECS,
+                SECURITY_FLAGS
+            ),
+        ),
         Err(e) => Err(e),
     }
 }
@@ -258,10 +267,41 @@ async fn pretend_password_processing() -> Error {
 
 /// On success, returns an access token that can be used to authorize with other APIs.
 ///
-/// The access request includes a refresh token that will only work for the L3 IP and user agent
-/// that originally created the token. If the provided token is used from a different IP or user
-/// agent, then the token will be invalidated.
+/// The access request includes a refresh token that will only work for the user agent that
+/// originally created the token. If the provided token is used from a different user agent, then
+/// the token will be invalidated.
 pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
+    let refresh_token = valid_refresh_token_from_str(user_agent, refresh_token).await?;
+
+    let user = match STORAGE.get_user(&refresh_token.email).await {
+        Some(v) => v,
+        None => {
+            println!("valid token for non-existent email {:?}", refresh_token);
+            return Err(remove_bad_refresh_token(&refresh_token).await);
+        }
+    };
+
+    create_jwt(&user).map_err(|e| {
+        println!("jwt create err: {}", e);
+        Error::InternalError
+    })
+}
+
+/// Revokes the refresh token provided. This is done regardless of the validations, because if the
+/// validations fail then the token **should** be revoked anyway.
+pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> {
+    let refresh_token = valid_refresh_token_from_str(user_agent, refresh_token).await?;
+
+    if STORAGE.get_user(&refresh_token.email).await.is_none() {
+        println!("valid token for non-existent email {:?}", refresh_token);
+        return Err(remove_bad_refresh_token(&refresh_token).await);
+    };
+
+    STORAGE.remove_refresh_token(&refresh_token).await
+}
+
+/// Returns a valid `RefreshToken` on success and an error otherwise.
+async fn valid_refresh_token_from_str(user_agent: &str, refresh_token: &str) -> Result<RefreshToken, Error> {
     let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
@@ -283,45 +323,7 @@ pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Err
         return Err(remove_bad_refresh_token(&refresh_token).await);
     }
 
-    let user = match STORAGE.get_user(&refresh_token.email).await {
-        Some(v) => v,
-        None => {
-            println!("valid token for non-existent email {:?}", refresh_token);
-            return Err(remove_bad_refresh_token(&refresh_token).await);
-        }
-    };
-
-    create_jwt(&user).map_err(|e| {
-        println!("jwt create err: {}", e);
-        Error::InternalError
-    })
-}
-
-/// Revokes the refresh token provided. This is done regardless of the security validations,
-/// because if the security validations fail then the user is compromised anyway and the token
-/// **should** be revoked.
-pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> {
-    let refresh_token = RefreshToken::from_str(refresh_token)?;
-    // remove token if expired
-    if refresh_token.exp < chrono::Utc::now().timestamp() {
-        return Err(remove_bad_refresh_token(&refresh_token).await);
-    }
-
-    // ensure token is used by same user agent
-    if user_agent != refresh_token.user_agent {
-        println!(
-            "token used by different agent {}, token: {:?}",
-            user_agent, &refresh_token
-        );
-        return Err(remove_bad_refresh_token(&refresh_token).await);
-    }
-
-    if STORAGE.get_user(&refresh_token.email).await.is_none() {
-        println!("valid token for non-existent email {:?}", refresh_token);
-        return Err(remove_bad_refresh_token(&refresh_token).await);
-    };
-
-    STORAGE.remove_refresh_token(&refresh_token).await
+    Ok(refresh_token)
 }
 
 /// Remove a bad refresh token from the set of known tokens.
@@ -334,22 +336,23 @@ async fn remove_bad_refresh_token(
     Error::RefreshTokenError
 }
 
-static MY_SECRET: Lazy<[u8; 256]> = Lazy::new(|| {
+static MY_JWT_SECRET: Lazy<[u8; 256]> = Lazy::new(|| {
     let mut a = [0u8; 256];
     rand::thread_rng().fill_bytes(&mut a);
     a
 });
 static ENCODING_KEY: Lazy<jsonwebtoken::EncodingKey> =
-    Lazy::new(|| jsonwebtoken::EncodingKey::from_secret(MY_SECRET.as_ref()));
+    Lazy::new(|| jsonwebtoken::EncodingKey::from_secret(MY_JWT_SECRET.as_ref()));
 static DECODING_KEY: Lazy<jsonwebtoken::DecodingKey> =
-    Lazy::new(|| jsonwebtoken::DecodingKey::from_secret(MY_SECRET.as_ref()));
+    Lazy::new(|| jsonwebtoken::DecodingKey::from_secret(MY_JWT_SECRET.as_ref()));
 static VALIDATION_PARAMS: Lazy<jsonwebtoken::Validation> =
     Lazy::new(|| jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512));
 
 /// Could add this to the access token claims:
 /// https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html#token-sidejacking
-/// but doesn't seem worthwhile considering that the access token is short-lived and should be kept
-/// in memory as opposed to a cookie or sessionStorage / localStorage.
+/// but doesn't seem worthwhile considering that the refresh token serves a similar role - the access
+/// token is short-lived and should be kept in memory as opposed to a cookie or sessionStorage /
+/// localStorage.
 #[derive(Debug, Deserialize, Serialize)]
 struct Claims {
     email: String,
@@ -360,8 +363,8 @@ struct Claims {
 #[cfg(not(feature = "dev_cors"))]
 const ACCESS_TOKEN_DURATION: i64 = 60;
 
-#[cfg(feature = "dev_cors")]
 // use very short duration for testing
+#[cfg(feature = "dev_cors")]
 const ACCESS_TOKEN_DURATION: i64 = 5;
 
 fn create_jwt(user: &storage::User) -> Result<String, anyhow::Error> {
