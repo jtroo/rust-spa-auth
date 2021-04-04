@@ -102,7 +102,7 @@ fn main() {
         );
 }
 
-/// Used to authenticate with a password and retrieve a refresh token.
+/// Authenticate with an email and a password to retrieve a refresh token cookie.
 async fn login_handler(
     user_agent: String,
     req: auth::AuthenticateRequest,
@@ -119,7 +119,7 @@ async fn login_handler(
     )
 }
 
-/// Used to get a new access token using a refresh token
+/// Get a new access token using a refresh token.
 async fn access_handler(
     user_agent: String,
     refresh_token: String,
@@ -131,7 +131,7 @@ async fn access_handler(
     )
 }
 
-/// Used to explicitly log out by revoking the refresh token.
+/// Explicitly log out by revoking the refresh token.
 async fn logout_handler(
     user_agent: String,
     refresh_token: String,
