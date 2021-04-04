@@ -50,9 +50,10 @@ fn main() {
                 .recover(error::handle_rejection)
         );
 
-    // This is here to stop unused variable warning
+    // This is here to stop unused variable warning, since with the feature `dev_cors` enabled, the
+    // port is reassigned without use.
     #[cfg(not(feature = "dev_cors"))]
-    let port = 8080;
+    let port = 80;
 
     #[cfg(feature = "dev_cors")]
     let (port, api_routes) = {
@@ -126,12 +127,13 @@ async fn access_handler(
     )
 }
 
-/// Used to get a new access token using a refresh token
+/// Used to explicitly log out by revoking the refresh token.
 async fn logout_handler(
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    // ignore result, always reply with 200
+    // Ignore result, always reply with 200. Don't want an attacker to know if they logged out with
+    // actual credentials or not.
     let _ = auth::logout(&user_agent, &refresh_token).await;
     Ok(warp::reply())
 }

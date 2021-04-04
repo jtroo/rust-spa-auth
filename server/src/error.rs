@@ -6,6 +6,8 @@ use warp::{Rejection, Reply, http::StatusCode};
 pub enum Error {
     #[error("wrong credentials")]
     WrongCredentialsError,
+    #[error("refresh token not valid")]
+    RefreshTokenError,
     #[error("jwt token not valid")]
     JWTTokenError,
     #[error("invalid auth header")]
@@ -19,9 +21,17 @@ pub enum Error {
 impl Error {
     fn status_code(self) -> StatusCode {
         match self {
-            Self::WrongCredentialsError => StatusCode::FORBIDDEN,
-            Self::NoPermissionError => StatusCode::UNAUTHORIZED,
-            Self::JWTTokenError => StatusCode::UNAUTHORIZED,
+            // Note regarding FORBIDDEN vs. UNAUTHORIZED:
+            //
+            // According to RFC 7235 (https://tools.ietf.org/html/rfc7235#section-3.1),
+            // UNAUTHORIZED should be used if using HTTP authentication. This can be inferred from
+            // the RFC which states that the WWW-Authenticate header must be sent by the server
+            // upon replying with UNAUTHORIZED. This server uses its own authentication method —
+            // not HTTP authentication — so UNAUTHORIZED must not be used.
+            //
+            // The WrongCredentialsError variant will have a BAD_REQUEST response.
+            Self::RefreshTokenError | Self::NoPermissionError | Self::JWTTokenError
+                => StatusCode::FORBIDDEN,
             Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::BAD_REQUEST,
         }

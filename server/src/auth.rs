@@ -49,6 +49,7 @@ pub fn init_default_users() {
 const BCRYPT_COST: u32 = 10;
 
 #[cfg(any(test, feature = "dev_cors"))]
+// use lower cost for dev for faster startup / login
 const BCRYPT_COST: u32 = 6;
 
 async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
@@ -140,20 +141,20 @@ impl std::str::FromStr for RefreshToken {
         let mut nonce_token_strs = s.splitn(2, '.');
         let nonce_str = nonce_token_strs
             .next()
-            .ok_or(Error::WrongCredentialsError)?;
+            .ok_or(Error::RefreshTokenError)?;
         let token_str = nonce_token_strs
             .next()
-            .ok_or(Error::WrongCredentialsError)?;
-        let nonce_bytes = base64::decode(nonce_str).map_err(|_| Error::WrongCredentialsError)?;
+            .ok_or(Error::RefreshTokenError)?;
+        let nonce_bytes = base64::decode(nonce_str).map_err(|_| Error::RefreshTokenError)?;
         let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes)
-            .map_err(|_| Error::WrongCredentialsError)?;
+            .map_err(|_| Error::RefreshTokenError)?;
         let mut token_bytes =
-            base64::decode(token_str).map_err(|_| Error::WrongCredentialsError)?;
+            base64::decode(token_str).map_err(|_| Error::RefreshTokenError)?;
         let token_bin = REFRESH_TOKEN_KEY
             .open_in_place(nonce, aead::Aad::empty(), token_bytes.as_mut())
-            .map_err(|_| Error::WrongCredentialsError)?;
+            .map_err(|_| Error::RefreshTokenError)?;
         Ok(bincode::deserialize::<RefreshToken>(&token_bin)
-            .map_err(|_| Error::WrongCredentialsError)?)
+            .map_err(|_| Error::RefreshTokenError)?)
     }
 }
 
@@ -265,7 +266,7 @@ pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Err
 
     // make sure the token is known
     if !STORAGE.refresh_token_exists(&refresh_token).await {
-        return Err(Error::WrongCredentialsError);
+        return Err(Error::RefreshTokenError);
     }
 
     // remove token if expired
@@ -330,7 +331,7 @@ async fn remove_bad_refresh_token(
     if let Err(e) = STORAGE.remove_refresh_token(token).await {
         return e;
     }
-    Error::WrongCredentialsError
+    Error::RefreshTokenError
 }
 
 static MY_SECRET: Lazy<[u8; 256]> = Lazy::new(|| {
@@ -356,9 +357,16 @@ struct Claims {
     exp: i64,
 }
 
+#[cfg(not(feature = "dev_cors"))]
+const ACCESS_TOKEN_DURATION: i64 = 60;
+
+#[cfg(feature = "dev_cors")]
+// use very short duration for testing
+const ACCESS_TOKEN_DURATION: i64 = 5;
+
 fn create_jwt(user: &storage::User) -> Result<String, anyhow::Error> {
     let exp = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::seconds(60))
+        .checked_add_signed(chrono::Duration::seconds(ACCESS_TOKEN_DURATION))
         .ok_or_else(|| anyhow!("could not make timestamp"))?
         .timestamp();
 
