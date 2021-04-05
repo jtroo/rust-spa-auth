@@ -157,8 +157,6 @@ curl https://localhost:9090/api/auth/logout \
 - clap 3.0 CLI args
 - lets-encrypt certificates
 - better logging
-- use an [AEAD implementation crate](https://github.com/RustCrypto/AEADs)
-  directly instead of ring
 
 # Special mentions
 

@@ -4,10 +4,11 @@ use crate::{error::Error, storage};
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use rand::RngCore;
-use ring::aead;
 use serde::{Deserialize, Serialize};
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::aead::{AeadInPlace, NewAead};
 
 static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
     = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
@@ -36,7 +37,7 @@ impl Role {
     }
 }
 
-static ARGON2: Lazy<Argon2> = Lazy::new(|| Argon2::default());
+static ARGON2: Lazy<Argon2> = Lazy::new(Argon2::default);
 
 async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
     let hashed_pw = ARGON2.hash_password_simple(
@@ -63,13 +64,20 @@ pub fn init_default_users() {
     });
 }
 
+// Keys are 32 bytes:
+// https://docs.rs/chacha20poly1305/0.7.1/chacha20poly1305/type.Key.html
+const KEY_LEN: usize = 32;
+
 // Need to change this if refresh token persistence is desired after restarting the binary.
-static REFRESH_TOKEN_KEY: Lazy<aead::LessSafeKey> = Lazy::new(|| {
-    let alg = &aead::CHACHA20_POLY1305;
-    let mut key = vec![0u8; alg.key_len()];
-    rand::thread_rng().fill_bytes(&mut key);
-    aead::LessSafeKey::new(aead::UnboundKey::new(&alg, &key).expect("incorrect ring usage"))
+static REFRESH_TOKEN_CIPHER: Lazy<ChaCha20Poly1305> = Lazy::new(|| {
+    let mut key_bytes = vec![0u8; KEY_LEN];
+    rand::thread_rng().fill_bytes(&mut key_bytes);
+    ChaCha20Poly1305::new(Key::from_slice(&key_bytes))
 });
+
+// Nonces are 12 bytes:
+// https://docs.rs/chacha20poly1305/0.7.1/chacha20poly1305/type.Nonce.html
+const NONCE_LEN: usize = 12;
 
 /// Content of the encrypted + encoded token that is sent in an authenticate response. The
 /// `user_agent` field is used to mitigate against token theft. It's not a very good check since
@@ -113,17 +121,17 @@ impl RefreshToken {
     /// Returns a `String` to be used as a token by client-side code. The data is serialized,
     /// encrypted, then base64 encoded.
     fn encrypt_encode(&self) -> Result<String, Error> {
-        let mut nonce = [0u8; aead::NONCE_LEN];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let nonce_string = base64::encode(&nonce);
-        let nonce = aead::Nonce::assume_unique_for_key(nonce);
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce_string = base64::encode(&nonce_bytes);
         let mut token = bincode::serialize(&self).map_err(|_| {
             println!("failed to serialize refresh token");
             Error::InternalError
         })?;
 
-        REFRESH_TOKEN_KEY
-            .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut token)
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        REFRESH_TOKEN_CIPHER
+            .encrypt_in_place(nonce, b"", &mut token)
             .map_err(|_| Error::InternalError)?;
 
         let token_string = base64::encode(&token);
@@ -145,15 +153,14 @@ impl std::str::FromStr for RefreshToken {
             .next()
             .ok_or(Error::RefreshTokenError)?;
         let nonce_bytes = base64::decode(nonce_str).map_err(|_| Error::RefreshTokenError)?;
-        let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes)
-            .map_err(|_| Error::RefreshTokenError)?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
         let mut token_bytes =
             base64::decode(token_str).map_err(|_| Error::RefreshTokenError)?;
-        let token_bin = REFRESH_TOKEN_KEY
-            .open_in_place(nonce, aead::Aad::empty(), token_bytes.as_mut())
+        REFRESH_TOKEN_CIPHER
+            .decrypt_in_place(nonce, b"", &mut token_bytes)
             .map_err(|_| Error::RefreshTokenError)?;
-        Ok(bincode::deserialize::<RefreshToken>(&token_bin)
-            .map_err(|_| Error::RefreshTokenError)?)
+        bincode::deserialize::<RefreshToken>(&token_bytes)
+            .map_err(|_| Error::RefreshTokenError)
     }
 }
 
@@ -181,14 +188,14 @@ pub struct AuthenticateRequest {
 /// see based on the claims.
 ///
 /// Unlike the access token, the browser has does not need to know what's inside a refresh token —
-/// they just need to give it back to get their access tokens. Thus this function (mis?)uses
-/// symmetric encryption from `ring::aead`, so that the browser does not know what's inside.
+/// they just need to give it back to get their access tokens. Thus this function uses symmetric
+/// encryption so that the browser does not know what's inside.
 ///
 /// I am not a security professional and so am unsure if the following is correct or not:
 ///
 /// The implementation exposes the nonce and does not check for re-used nonces. My understanding is
-/// that in `ring:aead`, the intent of the nonce to protect against attacks the network
-/// communication, e.g. replay attacks in https, ssh.
+/// that, the intent of the nonce to protect against attacks in the network communication, e.g.
+/// replay attacks in https, ssh.
 ///
 /// For symmetric keys, accidentally re-using a nonce does not risk leaking the key. In this
 /// webserver, the encrypted message is intended to be replayed back, so exposing the nonce and
