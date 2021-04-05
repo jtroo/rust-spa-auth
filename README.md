@@ -49,7 +49,7 @@ handling to be merged.
 - Conditionally visible UI components based on JWT claims
 - Automatic refreshing of access tokens on 403 error
 
-I am not the most procient client-side dev, so the structure of the client side
+I am not the most proficient client-side dev, so the structure of the client side
 code may not be what you want to emulate. The [API requests using
 axios](client/src/api/index.js) are probably the most useful to look at with
 regards to using the server APIs.
