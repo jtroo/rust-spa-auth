@@ -6,6 +6,8 @@ use once_cell::sync::Lazy;
 use rand::RngCore;
 use ring::aead;
 use serde::{Deserialize, Serialize};
+use argon2::Argon2;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
     = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
@@ -34,15 +36,13 @@ impl Role {
     }
 }
 
-#[cfg(all(not(test), not(feature = "dev_cors")))]
-const BCRYPT_COST: u32 = 10;
-
-#[cfg(any(test, feature = "dev_cors"))]
-// use lower cost for dev for faster startup / login
-const BCRYPT_COST: u32 = 6;
+static ARGON2: Lazy<Argon2> = Lazy::new(|| Argon2::default());
 
 async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
-    let hashed_pw = bcrypt::hash(pw, BCRYPT_COST)?;
+    let hashed_pw = ARGON2.hash_password_simple(
+        pw.as_ref(),
+        SaltString::generate(rand::thread_rng()).as_ref(),
+    ).map_err(|e| anyhow!(e))?.to_string();
     STORAGE.store_user(
         storage::User {
             email: email.into(),
@@ -217,13 +217,12 @@ pub async fn authenticate(
     // Password verification is done in a blocking task because it is CPU intensive.
     let verification_result = tokio::task::spawn_blocking(
         move || {
-            match bcrypt::verify(&req.pw, &hashed_pw).map_err(|e| {
-                println!("bcrypt verify err: {}", e);
+            let parsed_hash = PasswordHash::new(&hashed_pw).map_err(|e| {
+                println!("could not parse password hash: {}", e);
                 Error::InternalError
-            })? {
-                true => Ok(()),
-                false => Err(Error::WrongCredentialsError),
-            }
+            })?;
+            ARGON2.verify_password(req.pw.as_bytes(), &parsed_hash)
+                .map_err(|_| Error::WrongCredentialsError)
         }).await.map_err(|e| {
             println!("tokio err {}", e);
             Error::InternalError
@@ -254,9 +253,13 @@ pub async fn authenticate(
 /// workaround.
 async fn pretend_password_processing() -> Error {
     static PROCESSING_TIME: Lazy<std::time::Duration> = Lazy::new(|| {
-        let hashed_pw = bcrypt::hash("badpassword", BCRYPT_COST).expect("could not hash pw");
+        let salt = SaltString::generate(rand::thread_rng());
+        let pwhash = ARGON2.hash_password_simple(
+            b"badpassword",
+            salt.as_ref(),
+        ).expect("could not hash password");
         let start = std::time::Instant::now();
-        let _ = bcrypt::verify("abcdefg", &hashed_pw);
+        let _ = ARGON2.verify_password(b"abcdefg", &pwhash);
         let end = std::time::Instant::now();
         end - start
     });
@@ -398,7 +401,7 @@ pub fn authorize(role_required: Role, auth_header: String) -> Result<String, Err
 
     let decoded_claims =
         jsonwebtoken::decode::<Claims>(&jwt_str, &DECODING_KEY, &VALIDATION_PARAMS)
-            .map_err(|_| Error::JWTTokenError)?;
+            .map_err(|_| Error::JwtTokenError)?;
 
     if role_required == Role::Admin && Role::from_str(&decoded_claims.claims.role) != Role::Admin {
         return Err(Error::NoPermissionError);

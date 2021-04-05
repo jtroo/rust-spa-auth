@@ -13,7 +13,7 @@ pub enum Error {
     #[error("refresh token not valid")]
     RefreshTokenError,
     #[error("jwt token not valid")]
-    JWTTokenError,
+    JwtTokenError,
     #[error("invalid auth header")]
     InvalidAuthHeaderError,
     #[error("no permission")]
@@ -34,7 +34,7 @@ impl Error {
             // not HTTP authentication — so UNAUTHORIZED must not be used.
             //
             // The WrongCredentialsError variant will have a BAD_REQUEST response.
-            Self::RefreshTokenError | Self::NoPermissionError | Self::JWTTokenError
+            Self::RefreshTokenError | Self::NoPermissionError | Self::JwtTokenError
                 => StatusCode::FORBIDDEN,
             Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::BAD_REQUEST,

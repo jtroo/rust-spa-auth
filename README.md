@@ -34,11 +34,8 @@ handling to be merged.
 ## Server
 
 - Rust with a [Warp web server](https://crates.io/crates/warp)
-- Authentication using password hashing
-  - currently uses bcrypt for no particular reason
-  - [algorithm](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-    should be easy enough to change if desired
-- Authorization with 2 basic roles using JWT to validate claims
+- Authentication using Argon2 password hashing to produce refresh token cookies
+- Authorization with 2 basic roles using JWT access tokens for claims
 - [Optional CORS](#serve-the-spa-separately) for more rapid client side development
 - Example for abstracting a data store with a trait
   - In-memory implementation exists
@@ -88,6 +85,9 @@ cd build-output
 
 To serve the SPA and the server separately for more rapid client side code
 development, you can use the following commands:
+
+Note - you may have to navigate to https://localhost:9090 manually and accept
+the certificate warning before this works.
 
 Serve client files:
 ``` sh
@@ -154,10 +154,6 @@ curl https://localhost:9090/api/auth/logout \
 - delete the cookie on the client on logout
 - put all password processing on a single thread?
   - is this a good idea?
-- change password hashing fn to [argon2](https://crates.io/crates/argon2)
-  - note that the linked argon2 crate is newer / less downloaded than another
-    argon2 rate on crates.io, but is part of RustCrypto so seems like a better
-    bet
 - clap 3.0 CLI args
 - lets-encrypt certificates
 - better logging
