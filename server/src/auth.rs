@@ -194,8 +194,8 @@ pub struct AuthenticateRequest {
 /// I am not a security professional and so am unsure if the following is correct or not:
 ///
 /// The implementation exposes the nonce and does not check for re-used nonces. My understanding is
-/// that, the intent of the nonce to protect against attacks in the network communication, e.g.
-/// replay attacks in https, ssh.
+/// that the nonce is used to protect against attacks in network communication, e.g. replay
+/// attacks in https, ssh.
 ///
 /// For symmetric keys, accidentally re-using a nonce does not risk leaking the key. In this
 /// webserver, the encrypted message is intended to be replayed back, so exposing the nonce and
