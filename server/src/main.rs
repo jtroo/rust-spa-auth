@@ -3,14 +3,17 @@ mod error;
 mod storage;
 
 use warp::{http, filters, Filter};
+use log::*;
 
 fn main() {
-    println!("rust spa auth starting");
+    init_log();
 
-    println!("preparing default users");
+    info!("rust spa auth starting");
+
+    info!("preparing default users");
     auth::init_default_users();
 
-    println!("creating routes");
+    info!("creating routes");
 
     let login_api = warp::path!("login")
         .and(warp::post())
@@ -66,7 +69,7 @@ fn main() {
     #[cfg(feature = "dev_cors")]
     let (port, api_routes) = {
         const ORIGIN: &str = "http://localhost:8080";
-        println!("allowing CORS for development, origin: {}", ORIGIN);
+        info!("allowing CORS for development, origin: {}", ORIGIN);
         (
             9090,
             api_routes
@@ -86,7 +89,7 @@ fn main() {
         .or(spa_handler)
         .or(warp::fs::file(format!("{}/index.html", WEB_APP_DIR)));
 
-    println!("running webserver");
+    info!("running webserver");
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -100,6 +103,13 @@ fn main() {
                     .run(([0, 0, 0, 0], port)).await;
             }
         );
+}
+
+fn init_log() {
+    env_logger::Builder::from_env(
+        env_logger::Env::default()
+        .default_filter_or("info")) // use info level by default
+        .init();
 }
 
 /// Authenticate with an email and a password to retrieve a refresh token cookie.

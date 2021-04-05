@@ -9,6 +9,7 @@ use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use chacha20poly1305::aead::{AeadInPlace, NewAead};
+use log::*;
 
 static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
     = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
@@ -106,7 +107,7 @@ impl RefreshToken {
         let exp = chrono::Utc::now()
             .checked_add_signed(chrono::Duration::seconds(REFRESH_TOKEN_MAX_AGE_SECS))
             .ok_or_else(|| {
-                println!("could not make timestamp");
+                error!("could not make timestamp");
                 Error::InternalError
             })?
             .timestamp();
@@ -125,7 +126,7 @@ impl RefreshToken {
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce_string = base64::encode(&nonce_bytes);
         let mut token = bincode::serialize(&self).map_err(|_| {
-            println!("failed to serialize refresh token");
+            error!("failed to serialize refresh token");
             Error::InternalError
         })?;
 
@@ -225,13 +226,13 @@ pub async fn authenticate(
     let verification_result = tokio::task::spawn_blocking(
         move || {
             let parsed_hash = PasswordHash::new(&hashed_pw).map_err(|e| {
-                println!("could not parse password hash: {}", e);
+                error!("could not parse password hash: {}", e);
                 Error::InternalError
             })?;
             ARGON2.verify_password(req.pw.as_bytes(), &parsed_hash)
                 .map_err(|_| Error::WrongCredentialsError)
         }).await.map_err(|e| {
-            println!("tokio err {}", e);
+            error!("tokio err {}", e);
             Error::InternalError
         })?;
 
@@ -270,7 +271,7 @@ async fn pretend_password_processing() -> Error {
         let end = std::time::Instant::now();
         end - start
     });
-    println!("pretending to process password - should be an invalid email");
+    info!("pretending to process password - should be an invalid email");
     tokio::time::sleep(*PROCESSING_TIME).await;
     Error::WrongCredentialsError
 }
@@ -286,13 +287,13 @@ pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Err
     let user = match STORAGE.get_user(&refresh_token.email).await {
         Some(v) => v,
         None => {
-            println!("valid token for non-existent email {:?}", refresh_token);
+            warn!("valid token for non-existent email {:?}", refresh_token);
             return Err(remove_bad_refresh_token(&refresh_token).await);
         }
     };
 
     create_jwt(&user).map_err(|e| {
-        println!("jwt create err: {}", e);
+        error!("jwt create err: {}", e);
         Error::InternalError
     })
 }
@@ -303,7 +304,7 @@ pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> 
     let refresh_token = valid_refresh_token_from_str(user_agent, refresh_token).await?;
 
     if STORAGE.get_user(&refresh_token.email).await.is_none() {
-        println!("valid token for non-existent email {:?}", refresh_token);
+        warn!("valid token for non-existent email {:?}", refresh_token);
         return Err(remove_bad_refresh_token(&refresh_token).await);
     };
 
@@ -326,7 +327,7 @@ async fn valid_refresh_token_from_str(user_agent: &str, refresh_token: &str) -> 
 
     // ensure token is used by same user agent
     if user_agent != refresh_token.user_agent {
-        println!(
+        warn!(
             "token used by different agent {}, token: {:?}",
             user_agent, &refresh_token
         );

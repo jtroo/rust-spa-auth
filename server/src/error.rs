@@ -5,6 +5,7 @@
 use serde::Serialize;
 use thiserror::Error;
 use warp::{Rejection, Reply, http::StatusCode};
+use log::*;
 
 #[derive(Clone, Copy, Error, Debug)]
 pub enum Error {
@@ -55,7 +56,7 @@ pub async fn handle_rejection(
     err: Rejection
 ) -> std::result::Result<warp::reply::Response, std::convert::Infallible> {
     if let Some(e) = err.find::<Error>() {
-        eprintln!("custom rejection: {}", e);
+        debug!("custom rejection: {}", e);
         let code = e.status_code();
         let json = warp::reply::json(&ErrorResponse {
             status: code.to_string(),
@@ -63,7 +64,7 @@ pub async fn handle_rejection(
         });
         Ok(warp::reply::with_status(json, code).into_response())
     } else {
-        eprintln!("builtin rejection: {:?}", err);
+        debug!("builtin rejection: {:?}", err);
         Ok(err.default_response())
     }
 }

@@ -156,7 +156,6 @@ curl https://localhost:9090/api/auth/logout \
   - is this a good idea?
 - clap 3.0 CLI args
 - lets-encrypt certificates
-- better logging
 
 # Special mentions
 
