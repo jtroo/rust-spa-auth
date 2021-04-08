@@ -61,7 +61,7 @@ The authorization code is hopefully not closely tied to Warp framework details
 `error.rs`. As long as the server framework used is async capable, the auth
 code should be a decent starting point for use with other server frameworks.
 
-Since the webserver uses Warp, the code uses on the tokio runtime. Apart from
+Since the webserver uses Warp, the code uses the tokio runtime. Apart from
 the Warp related code, the `auth` module has a few instances where it is
 reliant on tokio. These are pretty minimal so it should be simple to adapt for
 webservers with another runtime, e.g. [Tide](https://crates.io/crates/tide).
