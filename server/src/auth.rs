@@ -1,6 +1,9 @@
 //! Provides functions for authentication and authorization.
 
-use crate::{error::Error, storage};
+use crate::{
+    error::Error,
+    storage::{self, Storage},
+};
 use anyhow::anyhow;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -10,9 +13,6 @@ use log::*;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-
-static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>> =
-    Lazy::new(|| Box::new(storage::new_in_memory_storage()));
 
 /// Used for role differentiation to showcase authorization of the admin route.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,7 +40,27 @@ impl Role {
 
 static ARGON2: Lazy<Argon2> = Lazy::new(Argon2::default);
 
-async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
+/// Initialize a user and an admin account. Panics if it cannot run.
+pub fn init_default_users<S: Storage>(store: &S) {
+    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        // also initialize the duration in `pretend_password_processing`
+        pretend_password_processing().await;
+        store_user(store, "user@localhost", "userpassword", Role::User)
+            .await
+            .expect("could not store default user");
+        store_user(store, "admin@localhost", "adminpassword", Role::Admin)
+            .await
+            .expect("could not store default admin");
+    });
+}
+
+async fn store_user<P: AsRef<[u8]>, S: Storage>(
+    store: &S,
+    email: &str,
+    pw: P,
+    role: Role,
+) -> Result<(), anyhow::Error> {
     let hashed_pw = ARGON2
         .hash_password_simple(
             pw.as_ref(),
@@ -48,7 +68,7 @@ async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<()
         )
         .map_err(|e| anyhow!(e))?
         .to_string();
-    STORAGE
+    store
         .store_user(storage::User {
             email: email.into(),
             hashed_pw,
@@ -58,23 +78,8 @@ async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<()
         .map_err(|e| anyhow!(e))
 }
 
-/// Initialize a user and an admin account. Panics if it cannot run.
-pub fn init_default_users() {
-    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
-    tokio::task::LocalSet::new().block_on(&rt, async {
-        // also initialize the duration in `pretend_password_processing`
-        pretend_password_processing().await;
-        store_user("user@localhost", "userpassword", Role::User)
-            .await
-            .expect("could not store default user");
-        store_user("admin@localhost", "adminpassword", Role::Admin)
-            .await
-            .expect("could not store default admin");
-    });
-}
-
 // Keys are 32 bytes:
-// https://docs.rs/chacha20poly1305/0.7.1/chacha20poly1305/type.Key.html
+// https:/kdocs.rs/chacha20poly1305/0.7.1/chacha20poly1305/type.Key.html
 const KEY_LEN: usize = 32;
 
 // Need to change this if refresh token persistence is desired after restarting the binary.
@@ -169,10 +174,14 @@ impl std::str::FromStr for RefreshToken {
 
 /// Add a new refresh token to the data store, returning its `String` representation for saving on
 /// the client side on success.
-async fn add_refresh_token(user_agent: &str, email: &str) -> Result<String, Error> {
+async fn add_refresh_token<S: Storage>(
+    store: &S,
+    user_agent: &str,
+    email: &str,
+) -> Result<String, Error> {
     let token = RefreshToken::new(user_agent, email)?;
     let ret = token.encrypt_encode()?;
-    STORAGE.add_refresh_token(token).await?;
+    store.add_refresh_token(token).await?;
     Ok(ret)
 }
 
@@ -207,12 +216,13 @@ pub struct AuthenticateRequest {
 /// The token should only be visible in the user's browser - not through network communication,
 /// because network comms should be encrypted via https. In addition, token theft is mitigated by
 /// checking the request's L3 source IP and the user agent header in the `access` function.
-pub async fn authenticate(
+pub async fn authenticate<S: Storage>(
+    store: &S,
     user_agent: &str,
     cookie_path: &str,
     req: AuthenticateRequest,
 ) -> Result<String, Error> {
-    let user = match STORAGE.get_user(&req.email).await {
+    let user = match store.get_user(&req.email).await {
         Some(v) => v,
         None => {
             return Err(pretend_password_processing().await);
@@ -245,7 +255,7 @@ pub async fn authenticate(
     match verification_result {
         Ok(()) => Ok(format!(
             "refresh_token={}; Path={}; Max-Age={}; {}",
-            add_refresh_token(&user_agent, &email).await?,
+            add_refresh_token(store, &user_agent, &email).await?,
             cookie_path,
             REFRESH_TOKEN_MAX_AGE_SECS,
             SECURITY_FLAGS
@@ -283,14 +293,18 @@ async fn pretend_password_processing() -> Error {
 /// The access request includes a refresh token that will only work for the user agent that
 /// originally created the token. If the provided token is used from a different user agent, then
 /// the token will be invalidated.
-pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Error> {
-    let refresh_token = valid_refresh_token_from_str(user_agent, refresh_token).await?;
+pub async fn access<S: Storage>(
+    store: &S,
+    user_agent: &str,
+    refresh_token: &str,
+) -> Result<String, Error> {
+    let refresh_token = valid_refresh_token_from_str(store, user_agent, refresh_token).await?;
 
-    let user = match STORAGE.get_user(&refresh_token.email).await {
+    let user = match store.get_user(&refresh_token.email).await {
         Some(v) => v,
         None => {
             warn!("valid token for non-existent email {:?}", refresh_token);
-            return Err(remove_bad_refresh_token(&refresh_token).await);
+            return Err(remove_bad_refresh_token(store, &refresh_token).await);
         }
     };
 
@@ -302,32 +316,37 @@ pub async fn access(user_agent: &str, refresh_token: &str) -> Result<String, Err
 
 /// Revokes the refresh token provided. This is done regardless of the validations, because if the
 /// validations fail then the token **should** be revoked anyway.
-pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> {
-    let refresh_token = valid_refresh_token_from_str(user_agent, refresh_token).await?;
+pub async fn logout<S: Storage>(
+    store: &S,
+    user_agent: &str,
+    refresh_token: &str,
+) -> Result<(), Error> {
+    let refresh_token = valid_refresh_token_from_str(store, user_agent, refresh_token).await?;
 
-    if STORAGE.get_user(&refresh_token.email).await.is_none() {
+    if store.get_user(&refresh_token.email).await.is_none() {
         warn!("valid token for non-existent email {:?}", refresh_token);
-        return Err(remove_bad_refresh_token(&refresh_token).await);
+        return Err(remove_bad_refresh_token(store, &refresh_token).await);
     };
 
-    STORAGE.remove_refresh_token(&refresh_token).await
+    store.remove_refresh_token(&refresh_token).await
 }
 
 /// Returns a valid `RefreshToken` on success and an error otherwise.
-async fn valid_refresh_token_from_str(
+async fn valid_refresh_token_from_str<S: Storage>(
+    store: &S,
     user_agent: &str,
     refresh_token: &str,
 ) -> Result<RefreshToken, Error> {
     let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
-    if !STORAGE.refresh_token_exists(&refresh_token).await {
+    if !store.refresh_token_exists(&refresh_token).await {
         return Err(Error::RefreshTokenError);
     }
 
     // remove token if expired
     if refresh_token.exp < chrono::Utc::now().timestamp() {
-        return Err(remove_bad_refresh_token(&refresh_token).await);
+        return Err(remove_bad_refresh_token(store, &refresh_token).await);
     }
 
     // ensure token is used by same user agent
@@ -336,15 +355,15 @@ async fn valid_refresh_token_from_str(
             "token used by different agent {}, token: {:?}",
             user_agent, &refresh_token
         );
-        return Err(remove_bad_refresh_token(&refresh_token).await);
+        return Err(remove_bad_refresh_token(store, &refresh_token).await);
     }
 
     Ok(refresh_token)
 }
 
 /// Remove a bad refresh token from the set of known tokens.
-async fn remove_bad_refresh_token(token: &RefreshToken) -> Error {
-    if let Err(e) = STORAGE.remove_refresh_token(token).await {
+async fn remove_bad_refresh_token<S: Storage>(store: &S, token: &RefreshToken) -> Error {
+    if let Err(e) = store.remove_refresh_token(token).await {
         return e;
     }
     Error::RefreshTokenError

@@ -3,6 +3,7 @@ mod error;
 mod storage;
 
 use log::*;
+use storage::Storage;
 use warp::{filters, http, Filter};
 
 fn main() {
@@ -11,11 +12,16 @@ fn main() {
     info!("rust spa auth starting");
 
     info!("preparing default users");
-    auth::init_default_users();
+    // TODO: init users
+    // auth::init_default_users();
 
     info!("creating routes");
 
+    let store = storage::new_in_memory_storage();
+    auth::init_default_users(&store);
+
     let login_api = warp::path!("login")
+        .and(with_storage(store.clone()))
         .and(warp::post())
         .and(filters::header::header::<String>("user-agent"))
         .and(warp::body::json())
@@ -27,12 +33,14 @@ fn main() {
 
     let access_api = warp::path!("auth" / "access")
         .and(warp::get())
+        .and(with_storage(store.clone()))
         .and(filters::header::header::<String>("user-agent"))
         .and(filters::cookie::cookie("refresh_token"))
         .and_then(access_handler);
 
     let logout_api = warp::path!("auth" / "logout")
         .and(warp::post())
+        .and(with_storage(store.clone()))
         .and(filters::header::header::<String>("user-agent"))
         .and(filters::cookie::cookie("refresh_token"))
         .and_then(logout_handler);
@@ -109,12 +117,20 @@ fn init_log() {
         .init();
 }
 
+/// Creates a filter that passes storage to the receiving fn.
+fn with_storage<S: Storage + Send + Sync + Clone>(
+    store: S,
+) -> impl Filter<Extract = (S,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || store.clone())
+}
+
 /// Authenticate with an email and a password to retrieve a refresh token cookie.
-async fn login_handler(
+async fn login_handler<S: Storage>(
+    store: S,
     user_agent: String,
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::authenticate(&user_agent, "/api/auth", req)
+    Ok(auth::authenticate(&store, &user_agent, "/api/auth", req)
         .await
         .map(|cookie| {
             warp::http::Response::builder()
@@ -124,23 +140,25 @@ async fn login_handler(
 }
 
 /// Get a new access token using a refresh token.
-async fn access_handler(
+async fn access_handler<S: Storage>(
+    store: S,
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::access(&user_agent, &refresh_token)
+    Ok(auth::access(&store, &user_agent, &refresh_token)
         .await
         .map(|token| warp::http::Response::builder().body(token))?)
 }
 
 /// Explicitly log out by revoking the refresh token.
-async fn logout_handler(
+async fn logout_handler<S: Storage>(
+    store: S,
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Ignore result, always reply with 200. Don't want an attacker to know if they logged out with
     // actual credentials or not.
-    let _ = auth::logout(&user_agent, &refresh_token).await;
+    let _ = auth::logout(&store, &user_agent, &refresh_token).await;
     Ok(warp::reply())
 }
 

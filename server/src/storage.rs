@@ -8,6 +8,7 @@ use crate::auth;
 use crate::error::Error;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// User storage
 #[derive(Clone, Debug)]
@@ -43,7 +44,7 @@ pub trait Storage {
 // See:
 // https://docs.rs/tokio/1.4.0/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
 #[async_trait::async_trait]
-impl Storage for InMemoryStore {
+impl Storage for Arc<InMemoryStore> {
     async fn get_user(&self, email: &str) -> Option<User> {
         self.users.read().get(email).cloned()
     }
@@ -68,11 +69,12 @@ impl Storage for InMemoryStore {
     }
 }
 
-/// Returns an implementer of `Storage + Send + Sync` that stores data in memory, as opposed to in
-/// a file or database.
-pub fn new_in_memory_storage() -> impl Storage + Send + Sync {
-    InMemoryStore {
+/// Returns an implementer of `Storage + Send + Sync + Clone` that stores data in memory, as
+/// opposed to in a file or database. You should see that the impl matches the trait requirement of
+/// `with_storage` in `main.rs`.
+pub fn new_in_memory_storage() -> impl Storage + Send + Sync + Clone {
+    Arc::new(InMemoryStore {
         users: RwLock::new(HashMap::new()),
         refresh_tokens: RwLock::new(HashSet::new()),
-    }
+    })
 }
