@@ -2,17 +2,17 @@
 
 use crate::{error::Error, storage};
 use anyhow::anyhow;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::Argon2;
+use chacha20poly1305::aead::{AeadInPlace, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use log::*;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use chacha20poly1305::aead::{AeadInPlace, NewAead};
-use log::*;
 
-static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>>
-    = Lazy::new(|| Box::new(storage::new_in_memory_storage()));
+static STORAGE: Lazy<Box<dyn storage::Storage + Send + Sync>> =
+    Lazy::new(|| Box::new(storage::new_in_memory_storage()));
 
 /// Used for role differentiation to showcase authorization of the admin route.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,17 +41,21 @@ impl Role {
 static ARGON2: Lazy<Argon2> = Lazy::new(Argon2::default);
 
 async fn store_user<P: AsRef<[u8]>>(email: &str, pw: P, role: Role) -> Result<(), anyhow::Error> {
-    let hashed_pw = ARGON2.hash_password_simple(
-        pw.as_ref(),
-        SaltString::generate(rand::thread_rng()).as_ref(),
-    ).map_err(|e| anyhow!(e))?.to_string();
-    STORAGE.store_user(
-        storage::User {
+    let hashed_pw = ARGON2
+        .hash_password_simple(
+            pw.as_ref(),
+            SaltString::generate(rand::thread_rng()).as_ref(),
+        )
+        .map_err(|e| anyhow!(e))?
+        .to_string();
+    STORAGE
+        .store_user(storage::User {
             email: email.into(),
             hashed_pw,
             role,
-        }
-    ).await.map_err(|e| anyhow!(e))
+        })
+        .await
+        .map_err(|e| anyhow!(e))
 }
 
 /// Initialize a user and an admin account. Panics if it cannot run.
@@ -60,8 +64,12 @@ pub fn init_default_users() {
     tokio::task::LocalSet::new().block_on(&rt, async {
         // also initialize the duration in `pretend_password_processing`
         pretend_password_processing().await;
-        store_user("user@localhost", "userpassword", Role::User).await.expect("could not store default user");
-        store_user("admin@localhost", "adminpassword", Role::Admin).await.expect("could not store default admin");
+        store_user("user@localhost", "userpassword", Role::User)
+            .await
+            .expect("could not store default user");
+        store_user("admin@localhost", "adminpassword", Role::Admin)
+            .await
+            .expect("could not store default admin");
     });
 }
 
@@ -147,21 +155,15 @@ impl std::str::FromStr for RefreshToken {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut nonce_token_strs = s.splitn(2, '.');
-        let nonce_str = nonce_token_strs
-            .next()
-            .ok_or(Error::RefreshTokenError)?;
-        let token_str = nonce_token_strs
-            .next()
-            .ok_or(Error::RefreshTokenError)?;
+        let nonce_str = nonce_token_strs.next().ok_or(Error::RefreshTokenError)?;
+        let token_str = nonce_token_strs.next().ok_or(Error::RefreshTokenError)?;
         let nonce_bytes = base64::decode(nonce_str).map_err(|_| Error::RefreshTokenError)?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let mut token_bytes =
-            base64::decode(token_str).map_err(|_| Error::RefreshTokenError)?;
+        let mut token_bytes = base64::decode(token_str).map_err(|_| Error::RefreshTokenError)?;
         REFRESH_TOKEN_CIPHER
             .decrypt_in_place(nonce, b"", &mut token_bytes)
             .map_err(|_| Error::RefreshTokenError)?;
-        bincode::deserialize::<RefreshToken>(&token_bytes)
-            .map_err(|_| Error::RefreshTokenError)
+        bincode::deserialize::<RefreshToken>(&token_bytes).map_err(|_| Error::RefreshTokenError)
     }
 }
 
@@ -223,30 +225,31 @@ pub async fn authenticate(
     let hashed_pw = user.hashed_pw;
 
     // Password verification is done in a blocking task because it is CPU intensive.
-    let verification_result = tokio::task::spawn_blocking(
-        move || {
-            let parsed_hash = PasswordHash::new(&hashed_pw).map_err(|e| {
-                error!("could not parse password hash: {}", e);
-                Error::InternalError
-            })?;
-            ARGON2.verify_password(req.pw.as_bytes(), &parsed_hash)
-                .map_err(|_| Error::WrongCredentialsError)
-        }).await.map_err(|e| {
-            error!("tokio err {}", e);
+    let verification_result = tokio::task::spawn_blocking(move || {
+        let parsed_hash = PasswordHash::new(&hashed_pw).map_err(|e| {
+            error!("could not parse password hash: {}", e);
             Error::InternalError
         })?;
+        ARGON2
+            .verify_password(req.pw.as_bytes(), &parsed_hash)
+            .map_err(|_| Error::WrongCredentialsError)
+    })
+    .await
+    .map_err(|e| {
+        error!("tokio err {}", e);
+        Error::InternalError
+    })?;
 
     const SECURITY_FLAGS: &str = "Secure; HttpOnly; SameSite=Lax;";
 
     match verification_result {
         Ok(()) => Ok(format!(
-                "refresh_token={}; Path={}; Max-Age={}; {}",
-                add_refresh_token(&user_agent, &email).await?,
-                cookie_path,
-                REFRESH_TOKEN_MAX_AGE_SECS,
-                SECURITY_FLAGS
-            ),
-        ),
+            "refresh_token={}; Path={}; Max-Age={}; {}",
+            add_refresh_token(&user_agent, &email).await?,
+            cookie_path,
+            REFRESH_TOKEN_MAX_AGE_SECS,
+            SECURITY_FLAGS
+        )),
         Err(e) => Err(e),
     }
 }
@@ -262,10 +265,9 @@ pub async fn authenticate(
 async fn pretend_password_processing() -> Error {
     static PROCESSING_TIME: Lazy<std::time::Duration> = Lazy::new(|| {
         let salt = SaltString::generate(rand::thread_rng());
-        let pwhash = ARGON2.hash_password_simple(
-            b"badpassword",
-            salt.as_ref(),
-        ).expect("could not hash password");
+        let pwhash = ARGON2
+            .hash_password_simple(b"badpassword", salt.as_ref())
+            .expect("could not hash password");
         let start = std::time::Instant::now();
         let _ = ARGON2.verify_password(b"abcdefg", &pwhash);
         let end = std::time::Instant::now();
@@ -312,7 +314,10 @@ pub async fn logout(user_agent: &str, refresh_token: &str) -> Result<(), Error> 
 }
 
 /// Returns a valid `RefreshToken` on success and an error otherwise.
-async fn valid_refresh_token_from_str(user_agent: &str, refresh_token: &str) -> Result<RefreshToken, Error> {
+async fn valid_refresh_token_from_str(
+    user_agent: &str,
+    refresh_token: &str,
+) -> Result<RefreshToken, Error> {
     let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
@@ -338,9 +343,7 @@ async fn valid_refresh_token_from_str(user_agent: &str, refresh_token: &str) -> 
 }
 
 /// Remove a bad refresh token from the set of known tokens.
-async fn remove_bad_refresh_token(
-    token: &RefreshToken,
-) -> Error {
+async fn remove_bad_refresh_token(token: &RefreshToken) -> Error {
     if let Err(e) = STORAGE.remove_refresh_token(token).await {
         return e;
     }

@@ -2,8 +2,8 @@ mod auth;
 mod error;
 mod storage;
 
-use warp::{http, filters, Filter};
 use log::*;
+use warp::{filters, http, Filter};
 
 fn main() {
     init_log();
@@ -25,13 +25,13 @@ fn main() {
     // routes that require the `refresh_token` cookie. These get a unique prefix so that the cookie
     // can use a more specific path and won't be sent for unnecessary routes.
 
-    let access_api = warp::path!("auth"/"access")
+    let access_api = warp::path!("auth" / "access")
         .and(warp::get())
         .and(filters::header::header::<String>("user-agent"))
         .and(filters::cookie::cookie("refresh_token"))
         .and_then(access_handler);
 
-    let logout_api = warp::path!("auth"/"logout")
+    let logout_api = warp::path!("auth" / "logout")
         .and(warp::post())
         .and(filters::header::header::<String>("user-agent"))
         .and(filters::cookie::cookie("refresh_token"))
@@ -51,15 +51,14 @@ fn main() {
     //
     // This "api" prefix is used so that API handlers' rejections can all be turned into replies by
     // `error::handle_rejection`. This is needed so that they don't fall back to the SPA handlers.
-    let api_routes = warp::path("api")
-        .and(
-            access_api
-                .or(login_api)
-                .or(user_api)
-                .or(admin_api)
-                .or(logout_api)
-                .recover(error::handle_rejection)
-        );
+    let api_routes = warp::path("api").and(
+        access_api
+            .or(login_api)
+            .or(user_api)
+            .or(admin_api)
+            .or(logout_api)
+            .recover(error::handle_rejection),
+    );
 
     // This is here to stop an unused variable warning, since with the feature `dev_cors` enabled,
     // the port is reassigned without use.
@@ -72,12 +71,12 @@ fn main() {
         info!("allowing CORS for development, origin: {}", ORIGIN);
         (
             9090,
-            api_routes
-                .with(warp::cors()
+            api_routes.with(
+                warp::cors()
                     .allow_origin(ORIGIN)
                     .allow_methods(vec!["GET", "PUT", "POST", "DELETE"])
                     .allow_headers(vec!["content-type", "user-agent", "authorization"])
-                    .allow_credentials(true)
+                    .allow_credentials(true),
             ),
         )
     };
@@ -98,17 +97,15 @@ fn main() {
         .block_on(async {
             warp::serve(routes)
                 .tls()
-                    .key_path("tls/server.rsa.key")
-                    .cert_path("tls/server.rsa.crt")
-                    .run(([0, 0, 0, 0], port)).await;
-            }
-        );
+                .key_path("tls/server.rsa.key")
+                .cert_path("tls/server.rsa.crt")
+                .run(([0, 0, 0, 0], port))
+                .await;
+        });
 }
 
 fn init_log() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default()
-        .default_filter_or("info")) // use info level by default
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")) // use info level by default
         .init();
 }
 
@@ -117,16 +114,13 @@ async fn login_handler(
     user_agent: String,
     req: auth::AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::authenticate(&user_agent, "/api/auth", req).await
+    Ok(auth::authenticate(&user_agent, "/api/auth", req)
+        .await
         .map(|cookie| {
             warp::http::Response::builder()
-                .header(
-                    "set-cookie",
-                    &cookie,
-                )
+                .header("set-cookie", &cookie)
                 .body("success")
-        })?
-    )
+        })?)
 }
 
 /// Get a new access token using a refresh token.
@@ -134,11 +128,9 @@ async fn access_handler(
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(
-        auth::access(&user_agent, &refresh_token)
-            .await
-            .map(|token| warp::http::Response::builder().body(token))?
-    )
+    Ok(auth::access(&user_agent, &refresh_token)
+        .await
+        .map(|token| warp::http::Response::builder().body(token))?)
 }
 
 /// Explicitly log out by revoking the refresh token.
@@ -158,7 +150,7 @@ async fn logout_handler(
 /// For example, if this called with `auth::Role::Admin`, then the returned filter will reject any
 /// requests that do not have an access token that states they are an admin.
 fn with_auth(
-    required_role: auth::Role
+    required_role: auth::Role,
 ) -> impl Filter<Extract = (String,), Error = warp::Rejection> + Clone {
     use once_cell::sync::Lazy;
     static AUTH_HEADER: Lazy<&str> = Lazy::new(|| http::header::AUTHORIZATION.as_str());
@@ -169,7 +161,7 @@ fn with_auth(
 
 /// Warp-ified wrapper for `auth::authorize`.
 async fn authorize(
-    (required_role, auth_header): (auth::Role, String)
+    (required_role, auth_header): (auth::Role, String),
 ) -> Result<String, warp::Rejection> {
     auth::authorize(required_role, auth_header).map_err(warp::reject::custom)
 }

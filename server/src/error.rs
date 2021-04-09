@@ -2,10 +2,10 @@
 //!
 //! Also exposes `handle_rejection` which can be used to ensure all rejections become replies.
 
+use log::*;
 use serde::Serialize;
 use thiserror::Error;
-use warp::{Rejection, Reply, http::StatusCode};
-use log::*;
+use warp::{http::StatusCode, Rejection, Reply};
 
 #[derive(Clone, Copy, Error, Debug)]
 pub enum Error {
@@ -35,8 +35,9 @@ impl Error {
             // not HTTP authentication — so UNAUTHORIZED must not be used.
             //
             // The WrongCredentialsError variant will have a BAD_REQUEST response.
-            Self::RefreshTokenError | Self::NoPermissionError | Self::JwtTokenError
-                => StatusCode::FORBIDDEN,
+            Self::RefreshTokenError | Self::NoPermissionError | Self::JwtTokenError => {
+                StatusCode::FORBIDDEN
+            }
             Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::BAD_REQUEST,
         }
@@ -53,7 +54,7 @@ impl warp::reject::Reject for Error {}
 
 /// Turn a rejection into a handled reply.
 pub async fn handle_rejection(
-    err: Rejection
+    err: Rejection,
 ) -> std::result::Result<warp::reply::Response, std::convert::Infallible> {
     if let Some(e) = err.find::<Error>() {
         debug!("custom rejection: {}", e);
