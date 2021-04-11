@@ -69,6 +69,7 @@ webservers with another runtime, e.g. [Tide](https://crates.io/crates/tide).
 Instances of tokio reliance:
 
 - `init_default_users`: uses `block_on` to run async code in a sync function
+- `store_user`: spawns a blocking task to run password hashing
 - `authenticate`: spawns a blocking task to run password verification
 - `pretend_password_processing`: uses tokio sleep
 

@@ -55,19 +55,24 @@ pub fn init_default_users<S: Storage>(store: &S) {
     });
 }
 
-async fn store_user<P: AsRef<[u8]>, S: Storage>(
+async fn store_user<P: 'static + AsRef<[u8]> + Send, S: Storage>(
     store: &S,
     email: &str,
     pw: P,
     role: Role,
 ) -> Result<(), anyhow::Error> {
-    let hashed_pw = ARGON2
-        .hash_password_simple(
-            pw.as_ref(),
-            SaltString::generate(rand::thread_rng()).as_ref(),
-        )
-        .map_err(|e| anyhow!(e))?
-        .to_string();
+    let hashed_pw = tokio::task::spawn_blocking(move || {
+        ARGON2
+            .hash_password_simple(
+                pw.as_ref(),
+                SaltString::generate(rand::thread_rng()).as_ref(),
+            )
+            .map(|pw| pw.to_string())
+    })
+    .await
+    .map_err(|e| anyhow!(e))?
+    .map_err(|e| anyhow!(e))?;
+
     store
         .store_user(storage::User {
             email: email.into(),
