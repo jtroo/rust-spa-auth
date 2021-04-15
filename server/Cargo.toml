@@ -19,6 +19,8 @@ chrono = "0.4"
 async-trait = "0.1"
 env_logger = "0.8"
 log = "0.4"
+structopt = { version = "0.3", features = ["paw"] }
+paw = "1"
 
 rand = { version = "0.8", features = ["std_rng"] }
 argon2 = { version = "0.1", features = ["password-hash"] }

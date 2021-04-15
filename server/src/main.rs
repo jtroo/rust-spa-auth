@@ -3,23 +3,28 @@ mod error;
 mod storage;
 
 use log::*;
+use std::net::SocketAddrV4;
+use std::process::exit;
 use storage::Storage;
 use warp::{filters, http, Filter};
 
-fn main() {
+#[derive(structopt::StructOpt)]
+struct Args {
+    #[structopt(short, long)]
+    address: Option<String>,
+}
+
+#[paw::main]
+fn main(args: Args) {
     init_log();
 
     info!("rust spa auth starting");
 
     info!("preparing default users");
-    // TODO: init users
-    // auth::init_default_users();
-
-    info!("creating routes");
-
     let store = storage::new_in_memory_storage();
     auth::init_default_users(&store);
 
+    info!("creating routes");
     let login_api = warp::path!("login")
         .and(with_storage(store.clone()))
         .and(warp::post())
@@ -70,15 +75,28 @@ fn main() {
 
     // This is here to stop an unused variable warning, since with the feature `dev_cors` enabled,
     // the port is reassigned without use.
-    #[cfg(not(feature = "dev_cors"))]
-    let port = 443;
+    let sockaddr: SocketAddrV4 = match &args.address {
+        Some(v) => v.parse().unwrap_or_else(|_| {
+            error!("Invalid socket address provided");
+            exit(1);
+        }),
+        None => SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 8080),
+    };
 
+    // This could be pretty trivially replaced with CLI arguments instead of a feature flag. A
+    // feature flag is used here to serve as an example
     #[cfg(feature = "dev_cors")]
-    let (port, api_routes) = {
+    let (sockaddr, api_routes) = {
         const ORIGIN: &str = "http://localhost:8080";
         info!("allowing CORS for development, origin: {}", ORIGIN);
+        if args.address.is_some() {
+            warn!(
+                "for feature `dev_cors`, address 127.0.0.1:9090 is used instead of input {}",
+                sockaddr
+            );
+        }
         (
-            9090,
+            SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 9090),
             api_routes.with(
                 warp::cors()
                     .allow_origin(ORIGIN)
@@ -107,7 +125,7 @@ fn main() {
                 .tls()
                 .key_path("tls/server.rsa.key")
                 .cert_path("tls/server.rsa.crt")
-                .run(([0, 0, 0, 0], port))
+                .run(sockaddr)
                 .await;
         });
 }

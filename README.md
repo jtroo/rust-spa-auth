@@ -153,10 +153,9 @@ curl https://localhost:9090/api/auth/logout \
 - auth rate limit
 - http to https redirect
 - delete the cookie on the client on logout
-- put all password processing on a single thread?
-  - is this a good idea?
-- clap 3.0 CLI args
+  - not really necessary, but can do for cleanliness
 - lets-encrypt certificates
+- add sqlx implementer of `Storage` trait
 
 # Special mentions
 
