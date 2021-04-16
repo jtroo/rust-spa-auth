@@ -75,6 +75,9 @@ Instances of tokio reliance:
 
 # Serve the SPA with Rust
 
+The command sequence below uses an in-memory data store. To use sqlite,
+different commands are needed.
+
 ```
 cd $(git rev-parse --show-toplevel)
 ./build-debug.sh
@@ -99,7 +102,11 @@ npm run serve
 Run server:
 ``` sh
 cd $(git rev-parse --show-toplevel)/server
-cargo run --features dev_cors
+cargo run --features in_memory,dev_cors
+# Can omit `in_memory` from above, but a database will need to be specified
+# e.g.
+export DATABASE_URL=sqlite:///tmp/db.sql
+cargo run --features dev_cors -- --database $DATABASE_URL
 ```
 
 # Example API Usage
@@ -155,7 +162,7 @@ curl https://localhost:9090/api/auth/logout \
 - delete the cookie on the client on logout
   - not really necessary, but can do for cleanliness
 - lets-encrypt certificates
-- add sqlx implementer of `Storage` trait
+- add APIs for add/delete user
 
 # Special mentions
 

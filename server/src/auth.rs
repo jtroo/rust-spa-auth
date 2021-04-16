@@ -23,14 +23,14 @@ pub enum Role {
 
 impl Role {
     // Doesn't use std::str::FromStr since the trait impl returns a Result and this is infallible.
-    fn from_str(role: &str) -> Self {
+    pub fn from_str(role: &str) -> Self {
         match role {
             "admin" => Self::Admin,
             _ => Self::User,
         }
     }
 
-    fn to_str(self) -> &'static str {
+    pub fn to_str(self) -> &'static str {
         match self {
             Self::Admin => "admin",
             Self::User => "user",
@@ -40,22 +40,10 @@ impl Role {
 
 static ARGON2: Lazy<Argon2> = Lazy::new(Argon2::default);
 
-/// Initialize a user and an admin account. Panics if it cannot run.
-pub fn init_default_users<S: Storage>(store: &S) {
-    let rt = tokio::runtime::Runtime::new().expect("could not spawn runtime");
-    tokio::task::LocalSet::new().block_on(&rt, async {
-        // also initialize the duration in `pretend_password_processing`
-        pretend_password_processing().await;
-        store_user(store, "user@localhost", "userpassword", Role::User)
-            .await
-            .expect("could not store default user");
-        store_user(store, "admin@localhost", "adminpassword", Role::Admin)
-            .await
-            .expect("could not store default admin");
-    });
-}
-
-async fn store_user<P: 'static + AsRef<[u8]> + Send, S: Storage>(
+/// FIXME: add methods to add/delete user. For now this has dead_code allowed to suppress compiler
+/// warnings.
+#[allow(dead_code)]
+pub async fn store_user<P: 'static + AsRef<[u8]> + Send, S: Storage>(
     store: &S,
     email: &str,
     pw: P,
@@ -227,7 +215,7 @@ pub async fn authenticate<S: Storage>(
     cookie_path: &str,
     req: AuthenticateRequest,
 ) -> Result<String, Error> {
-    let user = match store.get_user(&req.email).await {
+    let user = match store.get_user(&req.email).await? {
         Some(v) => v,
         None => {
             return Err(pretend_password_processing().await);
@@ -275,9 +263,9 @@ pub async fn authenticate<S: Storage>(
 ///
 /// There is currently a bug: on the first time this function is called, the delay is a lot longer
 /// than on every other call. A workaround is to call this function at some point during
-/// initialization. I'm too `Lazy` to fix it, so it's called in `init_default_users` to do the
-/// workaround.
-async fn pretend_password_processing() -> Error {
+/// initialization. I'm too `Lazy` to fix it, so it's declared as a `pub` function and called
+/// during init as the workaround.
+pub async fn pretend_password_processing() -> Error {
     static PROCESSING_TIME: Lazy<std::time::Duration> = Lazy::new(|| {
         let salt = SaltString::generate(rand::thread_rng());
         let pwhash = ARGON2
@@ -305,7 +293,7 @@ pub async fn access<S: Storage>(
 ) -> Result<String, Error> {
     let refresh_token = valid_refresh_token_from_str(store, user_agent, refresh_token).await?;
 
-    let user = match store.get_user(&refresh_token.email).await {
+    let user = match store.get_user(&refresh_token.email).await? {
         Some(v) => v,
         None => {
             warn!("valid token for non-existent email {:?}", refresh_token);
@@ -328,7 +316,7 @@ pub async fn logout<S: Storage>(
 ) -> Result<(), Error> {
     let refresh_token = valid_refresh_token_from_str(store, user_agent, refresh_token).await?;
 
-    if store.get_user(&refresh_token.email).await.is_none() {
+    if store.get_user(&refresh_token.email).await?.is_none() {
         warn!("valid token for non-existent email {:?}", refresh_token);
         return Err(remove_bad_refresh_token(store, &refresh_token).await);
     };
@@ -345,7 +333,7 @@ async fn valid_refresh_token_from_str<S: Storage>(
     let refresh_token = RefreshToken::from_str(refresh_token)?;
 
     // make sure the token is known
-    if !store.refresh_token_exists(&refresh_token).await {
+    if !store.refresh_token_exists(&refresh_token).await? {
         return Err(Error::RefreshTokenError);
     }
 

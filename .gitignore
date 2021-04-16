@@ -1,3 +1,14 @@
-target
-node_modules
-build-output
+# cargo build output directory
+target/
+
+# downloaded npm modules
+node_modules/
+
+# output directory for client+server builds
+build-output/
+
+# generated database files
+*.db*
+
+# ctags file
+tags

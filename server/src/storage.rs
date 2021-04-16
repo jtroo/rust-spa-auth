@@ -4,11 +4,17 @@
 //!
 //! A current TODO is to create a database-backed data store implementation.
 
-use crate::auth;
-use crate::error::Error;
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use crate::{auth, error::Error};
+
+#[cfg(feature = "in_memory")]
+mod in_memory;
+#[cfg(feature = "in_memory")]
+pub use in_memory::*;
+
+#[cfg(not(feature = "in_memory"))]
+mod db;
+#[cfg(not(feature = "in_memory"))]
+pub use db::*;
 
 /// User storage
 #[derive(Clone, Debug)]
@@ -18,63 +24,17 @@ pub struct User {
     pub role: auth::Role,
 }
 
-struct InMemoryStore {
-    users: RwLock<HashMap<String, User>>,
-    refresh_tokens: RwLock<HashSet<auth::RefreshToken>>,
-}
-
 /// Trait to unify the methods exposed by a data store implementation. The trait methods are async
 /// because database access should probably be async for better performance (see sqlx).
 #[async_trait::async_trait]
 pub trait Storage {
-    async fn get_user(&self, email: &str) -> Option<User>;
+    async fn get_user(&self, email: &str) -> Result<Option<User>, Error>;
 
     async fn store_user(&self, user: User) -> Result<(), Error>;
 
-    async fn refresh_token_exists(&self, token: &auth::RefreshToken) -> bool;
+    async fn refresh_token_exists(&self, token: &auth::RefreshToken) -> Result<bool, Error>;
 
     async fn add_refresh_token(&self, token: auth::RefreshToken) -> Result<(), Error>;
 
     async fn remove_refresh_token(&self, token: &auth::RefreshToken) -> Result<(), Error>;
-}
-
-// None of these functions are actually async. Could have use async locks, but if the critical
-// sections are short (which these should be), then it is suggested to use blocking locks.
-//
-// See:
-// https://docs.rs/tokio/1.4.0/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
-#[async_trait::async_trait]
-impl Storage for Arc<InMemoryStore> {
-    async fn get_user(&self, email: &str) -> Option<User> {
-        self.users.read().get(email).cloned()
-    }
-
-    async fn store_user(&self, user: User) -> Result<(), Error> {
-        self.users.write().insert(user.email.clone(), user);
-        Ok(())
-    }
-
-    async fn refresh_token_exists(&self, token: &auth::RefreshToken) -> bool {
-        self.refresh_tokens.read().get(token).is_some()
-    }
-
-    async fn add_refresh_token(&self, token: auth::RefreshToken) -> Result<(), Error> {
-        self.refresh_tokens.write().insert(token);
-        Ok(())
-    }
-
-    async fn remove_refresh_token(&self, token: &auth::RefreshToken) -> Result<(), Error> {
-        self.refresh_tokens.write().remove(token);
-        Ok(())
-    }
-}
-
-/// Returns an implementer of `Storage + Send + Sync + Clone` that stores data in memory, as
-/// opposed to in a file or database. You should see that the impl matches the trait requirement of
-/// `with_storage` in `main.rs`.
-pub fn new_in_memory_storage() -> impl Storage + Send + Sync + Clone {
-    Arc::new(InMemoryStore {
-        users: RwLock::new(HashMap::new()),
-        refresh_tokens: RwLock::new(HashSet::new()),
-    })
 }

@@ -29,7 +29,7 @@ cd $GITROOT/server
 echo "Building server code"
 echo
 
-cargo build
+cargo build --features in_memory
 cp target/debug/rust-spa-auth $OUTPUT_DIR/
 cp -r tls/ $OUTPUT_DIR/
 

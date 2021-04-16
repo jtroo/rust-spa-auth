@@ -2,6 +2,7 @@ mod auth;
 mod error;
 mod storage;
 
+use auth::*;
 use log::*;
 use std::net::SocketAddrV4;
 use std::process::exit;
@@ -10,19 +11,52 @@ use warp::{filters, http, Filter};
 
 #[derive(structopt::StructOpt)]
 struct Args {
-    #[structopt(short, long)]
+    #[structopt(short, long, help = "Address to bind to, e.g. 127.0.0.1:80")]
     address: Option<String>,
+
+    #[structopt(short, long, help = "Database URL, e.g. sqlite:///tmp/db.sql")]
+    database: Option<String>,
 }
 
 #[paw::main]
-fn main(args: Args) {
+#[tokio::main]
+async fn main(args: Args) {
     init_log();
 
     info!("rust spa auth starting");
 
-    info!("preparing default users");
-    let store = storage::new_in_memory_storage();
-    auth::init_default_users(&store);
+    // This is underscored since conditional compilation with `in_memory` causes this to become an
+    // unused variable. However, this operation needs to be here in order to split ownership of
+    // `args` successfully.
+    let _db = args.database;
+
+    let store = {
+        auth::pretend_password_processing().await;
+
+        #[cfg(not(feature = "in_memory"))]
+        {
+            info!("connecting to database");
+            let store = storage::new_db_storage(&_db.expect("No database provided"))
+                .await
+                .expect("could not connect to database");
+            store
+        }
+
+        #[cfg(feature = "in_memory")]
+        {
+            let store = storage::new_in_memory_storage();
+            // Need to store some default users for in_memory, otherwise nothing will exist. This
+            // does not apply to a database, because a database can have pre-existing users.
+            info!("preparing default users for in-memory store");
+            store_user(&store, "user@localhost", "userpassword", Role::User)
+                .await
+                .expect("could not store default user");
+            store_user(&store, "admin@localhost", "adminpassword", Role::Admin)
+                .await
+                .expect("could not store default admin");
+            store
+        }
+    };
 
     info!("creating routes");
     let login_api = warp::path!("login")
@@ -45,17 +79,17 @@ fn main(args: Args) {
 
     let logout_api = warp::path!("auth" / "logout")
         .and(warp::post())
-        .and(with_storage(store.clone()))
+        .and(with_storage(store))
         .and(filters::header::header::<String>("user-agent"))
         .and(filters::cookie::cookie("refresh_token"))
         .and_then(logout_handler);
 
     let user_api = warp::path!("user")
-        .and(with_auth(auth::Role::User))
+        .and(with_auth(Role::User))
         .and_then(user_handler);
 
     let admin_api = warp::path!("admin")
-        .and(with_auth(auth::Role::Admin))
+        .and(with_auth(Role::Admin))
         .and_then(admin_handler);
 
     // Note: warp::path is **not** the macro! The macro version would terminate path checking at
@@ -83,8 +117,10 @@ fn main(args: Args) {
         None => SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 8080),
     };
 
-    // This could be pretty trivially replaced with CLI arguments instead of a feature flag. A
-    // feature flag is used here to serve as an example
+    // It actually seems a bit cleaner to use a feature flag here rather than a conditional,
+    // because the type of `api_routes` is changing here. So there would need to be a CORS branch
+    // and a non-CORS branch with some repeated code to do this with a conditional instead of a
+    // feature flag.
     #[cfg(feature = "dev_cors")]
     let (sockaddr, api_routes) = {
         const ORIGIN: &str = "http://localhost:8080";
@@ -115,19 +151,12 @@ fn main(args: Args) {
         .or(warp::fs::file(format!("{}/index.html", WEB_APP_DIR)));
 
     info!("running webserver");
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("runtime should start")
-        .block_on(async {
-            warp::serve(routes)
-                .tls()
-                .key_path("tls/server.rsa.key")
-                .cert_path("tls/server.rsa.crt")
-                .run(sockaddr)
-                .await;
-        });
+    warp::serve(routes)
+        .tls()
+        .key_path("tls/server.rsa.key")
+        .cert_path("tls/server.rsa.crt")
+        .run(sockaddr)
+        .await;
 }
 
 fn init_log() {
@@ -146,9 +175,9 @@ fn with_storage<S: Storage + Send + Sync + Clone>(
 async fn login_handler<S: Storage>(
     store: S,
     user_agent: String,
-    req: auth::AuthenticateRequest,
+    req: AuthenticateRequest,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::authenticate(&store, &user_agent, "/api/auth", req)
+    Ok(authenticate(&store, &user_agent, "/api/auth", req)
         .await
         .map(|cookie| {
             warp::http::Response::builder()
@@ -163,7 +192,7 @@ async fn access_handler<S: Storage>(
     user_agent: String,
     refresh_token: String,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(auth::access(&store, &user_agent, &refresh_token)
+    Ok(access(&store, &user_agent, &refresh_token)
         .await
         .map(|token| warp::http::Response::builder().body(token))?)
 }
@@ -176,7 +205,7 @@ async fn logout_handler<S: Storage>(
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Ignore result, always reply with 200. Don't want an attacker to know if they logged out with
     // actual credentials or not.
-    let _ = auth::logout(&store, &user_agent, &refresh_token).await;
+    let _ = logout(&store, &user_agent, &refresh_token).await;
     Ok(warp::reply())
 }
 
@@ -186,7 +215,7 @@ async fn logout_handler<S: Storage>(
 /// For example, if this called with `auth::Role::Admin`, then the returned filter will reject any
 /// requests that do not have an access token that states they are an admin.
 fn with_auth(
-    required_role: auth::Role,
+    required_role: Role,
 ) -> impl Filter<Extract = (String,), Error = warp::Rejection> + Clone {
     use once_cell::sync::Lazy;
     static AUTH_HEADER: Lazy<&str> = Lazy::new(|| http::header::AUTHORIZATION.as_str());
@@ -197,7 +226,7 @@ fn with_auth(
 
 /// Warp-ified wrapper for `auth::authorize`.
 async fn authorize(
-    (required_role, auth_header): (auth::Role, String),
+    (required_role, auth_header): (Role, String),
 ) -> Result<String, warp::Rejection> {
     auth::authorize(required_role, auth_header).map_err(warp::reject::custom)
 }
