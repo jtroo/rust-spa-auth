@@ -72,6 +72,7 @@ Instances of tokio reliance:
 - `store_user`: spawns a blocking task to run password hashing
 - `authenticate`: spawns a blocking task to run password verification
 - `pretend_password_processing`: uses tokio sleep
+- `#[tokio::test]` is used for async tests
 
 # Serve the SPA with Rust
 

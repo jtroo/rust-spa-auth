@@ -7,7 +7,7 @@ use serde::Serialize;
 use thiserror::Error;
 use warp::{http::StatusCode, Rejection, Reply};
 
-#[derive(Clone, Copy, Error, Debug)]
+#[derive(Clone, Copy, Error, Debug, PartialEq, Eq)]
 pub enum Error {
     #[error("wrong credentials")]
     WrongCredentialsError,

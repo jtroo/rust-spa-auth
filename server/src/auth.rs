@@ -334,11 +334,19 @@ async fn valid_refresh_token_from_str<S: Storage>(
 
     // make sure the token is known
     if !store.refresh_token_exists(&refresh_token).await? {
+        warn!(
+            "unknown refresh token provided, email {} agent {}",
+            refresh_token.email, user_agent,
+        );
         return Err(Error::RefreshTokenError);
     }
 
     // remove token if expired
     if refresh_token.exp < chrono::Utc::now().timestamp() {
+        warn!(
+            "expired refresh token provided, email {} agent {}",
+            refresh_token.email, user_agent,
+        );
         return Err(remove_bad_refresh_token(store, &refresh_token).await);
     }
 
@@ -346,7 +354,7 @@ async fn valid_refresh_token_from_str<S: Storage>(
     if user_agent != refresh_token.user_agent {
         warn!(
             "token used by different agent {}, token: {:?}",
-            user_agent, &refresh_token
+            user_agent, &refresh_token,
         );
         return Err(remove_bad_refresh_token(store, &refresh_token).await);
     }
@@ -431,4 +439,160 @@ pub fn authorize(role_required: Role, auth_header: String) -> Result<String, Err
     }
 
     Ok(decoded_claims.claims.email)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_log() {
+        static _INIT_LOG: Lazy<u8> = Lazy::new(|| {
+            crate::init_log();
+            0
+        });
+    }
+
+    fn token_from_cookie(t: &str) -> &str {
+        t.split(';')
+            .next()
+            .expect("bad cookie")
+            .trim_start_matches("refresh_token=")
+    }
+
+    #[cfg(feature = "in_memory")]
+    async fn storage() -> impl Storage + Send + Sync + Clone {
+        crate::storage::new_in_memory_storage()
+    }
+
+    #[cfg(not(feature = "in_memory"))]
+    async fn storage() -> impl Storage + Send + Sync + Clone {
+        let dbname = std::env::var("DATABASE_URL").expect("need DATABASE_URL variable");
+        crate::storage::new_db_storage(&dbname).await.expect("no db available")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_good_authenticate_access_authorize() {
+        init_log();
+        let s = storage().await;
+        assert!(store_user(&s, "admin", "goodpasswordgoeshere", Role::Admin)
+            .await
+            .is_ok());
+
+        let refresh_cookie = authenticate(
+            &s,
+            "cargo test",
+            "/path",
+            AuthenticateRequest {
+                email: "admin".into(),
+                pw: "goodpasswordgoeshere".into(),
+            },
+        )
+        .await
+        .expect("authenticate failed");
+
+        let refresh_token = token_from_cookie(&refresh_cookie);
+        let access_token = access(&s, "cargo test", &refresh_token)
+            .await
+            .expect("access failed");
+
+        assert_eq!(
+            authorize(Role::Admin, format!("Bearer {}", access_token)),
+            Ok("admin".into())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bad_authenticate() {
+        init_log();
+        let s = storage().await;
+        assert!(store_user(&s, "admin", "goodpasswordgoeshere", Role::Admin)
+            .await
+            .is_ok());
+
+        assert!(authenticate(
+            &s,
+            "cargo test",
+            "/path",
+            AuthenticateRequest {
+                email: "noexist".into(),
+                pw: "goodpasswordgoeshere".into(),
+            },
+        )
+        .await
+        .is_err());
+
+        assert!(authenticate(
+            &s,
+            "cargo test",
+            "/path",
+            AuthenticateRequest {
+                email: "admin".into(),
+                pw: "incorrectpassword".into(),
+            },
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bad_access() {
+        init_log();
+        let s = storage().await;
+        assert!(store_user(&s, "admin", "goodpasswordgoeshere", Role::Admin)
+            .await
+            .is_ok());
+
+        let refresh_cookie = authenticate(
+            &s,
+            "cargo test",
+            "/path",
+            AuthenticateRequest {
+                email: "admin".into(),
+                pw: "goodpasswordgoeshere".into(),
+            },
+        )
+        .await
+        .expect("authenticate failed");
+
+        let refresh_token = token_from_cookie(&refresh_cookie);
+
+        // use different user agent
+        assert!(access(&s, "not cargo test", &refresh_token).await.is_err());
+        // use correct user agent - no longer works
+        assert!(access(&s, "cargo test", &refresh_token).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bad_authorize() {
+        init_log();
+        let s = storage().await;
+        assert!(
+            store_user(&s, "notadmin", "goodpasswordgoeshere", Role::User)
+                .await
+                .is_ok()
+        );
+
+        let refresh_cookie = authenticate(
+            &s,
+            "cargo test",
+            "/path",
+            AuthenticateRequest {
+                email: "notadmin".into(),
+                pw: "goodpasswordgoeshere".into(),
+            },
+        )
+        .await
+        .expect("authenticate failed");
+
+        let refresh_token = token_from_cookie(&refresh_cookie);
+        let access_token = access(&s, "cargo test", &refresh_token)
+            .await
+            .expect("access failed");
+
+        assert!(authorize(Role::Admin, format!("Bearer {}", access_token)).is_err());
+        assert_eq!(
+            authorize(Role::User, format!("Bearer {}", access_token)),
+            Ok("notadmin".into())
+        );
+    }
 }

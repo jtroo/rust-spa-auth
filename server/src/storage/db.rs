@@ -119,7 +119,7 @@ impl Storage for SqlitePool {
     }
 }
 
-/// Returns an implementer of `Storage + Send + Sync + Clone` that is backed by the sqlite database
+/// Returns an implementer of `Storage + Send + Clone` that is backed by the sqlite database
 /// provided as the URL input.
 #[cfg(not(feature = "in_memory"))]
 pub async fn new_db_storage(url: &str) -> Result<SqlitePool, Error> {
