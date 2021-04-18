@@ -1,7 +1,10 @@
 use crate::auth::*;
 use crate::error;
 use crate::storage::Storage;
-use warp::{Filter, filters::{self, BoxedFilter}, http, reply};
+use warp::{
+    filters::{self, BoxedFilter},
+    http, reply, Filter,
+};
 
 pub fn api<S: 'static + Storage + Send + Sync + Clone>(
     store: S,
@@ -73,7 +76,8 @@ pub fn api<S: 'static + Storage + Send + Sync + Clone>(
 
 pub fn spa(client_files_dir: String) -> BoxedFilter<(impl reply::Reply,)> {
     warp::fs::dir(client_files_dir.clone())
-        .or(warp::fs::file(format!("{}/index.html", client_files_dir))).boxed()
+        .or(warp::fs::file(format!("{}/index.html", client_files_dir)))
+        .boxed()
 }
 
 /// Creates a filter that passes storage to the receiving fn.

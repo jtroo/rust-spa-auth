@@ -51,7 +51,6 @@ async fn main(args: Args) {
         SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 9090)
     };
 
-
     let routes = routes::api(store).or(routes::spa("./public".into()));
 
     log::info!("running webserver");

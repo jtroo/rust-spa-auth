@@ -246,13 +246,20 @@ pub async fn authenticate<S: Storage>(
     const SECURITY_FLAGS: &str = "Secure; HttpOnly; SameSite=Lax;";
 
     match verification_result {
-        Ok(()) => Ok(format!(
-            "refresh_token={}; Path={}; Max-Age={}; {}",
-            add_refresh_token(store, &user_agent, &email).await?,
-            cookie_path,
-            REFRESH_TOKEN_MAX_AGE_SECS,
-            SECURITY_FLAGS
-        )),
+        Ok(()) => {
+            log::info!(
+                "{} authenticated with agent {}",
+                &email,
+                &user_agent
+            );
+            Ok(format!(
+                "refresh_token={}; Path={}; Max-Age={}; {}",
+                add_refresh_token(store, &user_agent, &email).await?,
+                cookie_path,
+                REFRESH_TOKEN_MAX_AGE_SECS,
+                SECURITY_FLAGS
+            ))
+        }
         Err(e) => Err(e),
     }
 }
