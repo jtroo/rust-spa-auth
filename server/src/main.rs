@@ -75,7 +75,11 @@ fn init_log() {
 #[cfg(not(feature = "in_memory"))]
 async fn init_store(db: Option<String>) -> impl storage::Storage + Send + Sync + Clone {
     log::info!("connecting to database");
-    storage::new_db_storage(&db.expect("No database provided"))
+    let db = db.unwrap_or_else(|| {
+        std::env::var("DATABASE_URL")
+            .expect("Need `--database <db>` flag or `DATABASE_URL` env variable")
+    });
+    storage::new_db_storage(&db)
         .await
         .expect("could not connect to database")
 }
