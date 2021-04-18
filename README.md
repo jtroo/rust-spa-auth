@@ -56,10 +56,10 @@ regards to using the server APIs.
 
 # Note on server framework and async runtime
 
-The authorization code is hopefully not closely tied to Warp framework details
-— most of the Warp-specific code is in `main.rs` with a sprinkle in
-`error.rs`. As long as the server framework used is async capable, the auth
-code should be a decent starting point for use with other server frameworks.
+Most of the code is hopefully not closely tied to Warp framework details — most
+of the Warp-specific code is in `routes.rs` with a sprinkle in `main.rs` and
+`error.rs`. As long as the server framework used is async capable, the rest of
+it should be a decent starting point for use with other server frameworks.
 
 Since the webserver uses Warp, the code uses the tokio runtime. Apart from
 the Warp related code, the `auth` module has a few instances where it is
@@ -157,13 +157,13 @@ curl https://localhost:9090/api/auth/logout \
 
 # Potential changes/additions
 
-- tests
 - auth rate limit
 - http to https redirect
 - delete the cookie on the client on logout
   - not really necessary, but can do for cleanliness
 - lets-encrypt certificates
 - add APIs for add/delete user
+- casbin
 
 # Special mentions
 

@@ -467,7 +467,9 @@ mod tests {
     #[cfg(not(feature = "in_memory"))]
     async fn storage() -> impl Storage + Send + Sync + Clone {
         let dbname = std::env::var("DATABASE_URL").expect("need DATABASE_URL variable");
-        crate::storage::new_db_storage(&dbname).await.expect("no db available")
+        crate::storage::new_db_storage(&dbname)
+            .await
+            .expect("no db available")
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -16,14 +16,14 @@ echo
 echo "Running tests with database store"
 
 DATABASE=/tmp/.rust_spa_auth_test.db
-DATABASE_URL=sqlite://$DATABASE
 
 function cleanup {
         rm -f $DATABASE
 }
+
 trap cleanup EXIT
 
 cd $GITROOT/server/db
 ./create_sqlite3_db.sh $DATABASE
 
-DATABASE_URL=$DATABASE_URL cargo test -- --nocapture
+DATABASE_URL=sqlite://$DATABASE cargo test -- --nocapture
