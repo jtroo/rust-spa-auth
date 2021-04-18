@@ -16,7 +16,7 @@ if [ -d build-output/public ]; then
 	echo "Client side files already exist."
 	echo
 	echo "If you want to rebuild the client files, run:"
-	echo "rm -r $OUTPUT_DIR/public"
+	echo "rm -r $OUTPUT_DIR/public && $0"
 	echo
 else
 	cd $GITROOT/client
@@ -40,9 +40,4 @@ echo "Done"
 echo
 echo "To run:"
 echo "cd $GITROOT/build-output; ./rust-spa-auth"
-echo
-echo "The above command may need sudo to succeed."
-echo
-echo "See the thread below for the implications regarding this issue:"
-echo "https://superuser.com/questions/710253/allow-non-root-process-to-bind-to-port-80-and-443"
 echo
