@@ -8,6 +8,9 @@ set -eu
 
 GITROOT=$(git rev-parse --show-toplevel)
 
+cd $GITROOT/server
+cargo clippy
+
 echo
 echo "Running tests with in_memory store"
 cargo test --features in_memory

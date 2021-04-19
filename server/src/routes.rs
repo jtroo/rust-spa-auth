@@ -166,20 +166,78 @@ mod tests {
         api(test_store)
     }
 
-    #[tokio::test]
-    async fn test_api_success() {
-        let f = create_api_filter().await;
+    fn resp_body(r: &warp::http::Response<warp::hyper::body::Bytes>) -> &str {
+        from_utf8(r.body()).expect("bad utf8")
+    }
 
-        // check that login with incorrect credentials gets 400 response
-        let response = warp::test::request()
+    async fn get_refresh_token(f: &BoxedFilter<(impl reply::Reply + 'static,)>, email: &str, pw: &str) -> Vec<u8> {
+        let resp = warp::test::request()
             .method("POST")
             .header("user-agent", "cargo test")
-            .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
+            .body(format!(r#"{{"email":"{}","pw":"{}"}}"#, email, pw))
             .path("/api/login")
+            .reply(f)
+            .await;
+        assert_eq!(resp.status(), 200);
+        resp.headers().get("set-cookie").expect("no cookie").as_ref().to_owned()
+    }
+
+    async fn get_access_token(f: &BoxedFilter<(impl reply::Reply + 'static,)>, email: &str, pw: &str) -> String {
+        let cookie = get_refresh_token(f, email, pw).await;
+        let resp = warp::test::request()
+            .method("GET")
+            .header("user-agent", "cargo test")
+            .header("cookie", cookie)
+            .path("/api/auth/access")
+            .reply(f)
+            .await;
+        assert_eq!(resp.status(), 200);
+        resp_body(&resp).to_owned()
+    }
+
+    #[tokio::test]
+    async fn test_authorize_user_admin() {
+        let f = create_api_filter().await;
+
+        let access_token = get_access_token(&f, "user@localhost", "userpassword").await;
+
+        // user can access user api
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("Bearer {}", &access_token))
+            .path("/api/user")
             .reply(&f)
             .await;
-        assert_eq!(response.status(), 200);
-        dbg!(response);
+        assert_eq!(resp.status(), 200);
+
+        // user cannot access user api
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("Bearer {}", &access_token))
+            .path("/api/admin")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+
+        let access_token = get_access_token(&f, "admin@localhost", "adminpassword").await;
+
+        // admin can access user api
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("Bearer {}", &access_token))
+            .path("/api/user")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 200);
+
+        // admin can access admin api
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("Bearer {}", &access_token))
+            .path("/api/admin")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 200);
     }
 
     #[tokio::test]
@@ -187,62 +245,143 @@ mod tests {
         let f = create_api_filter().await;
 
         // check that nonexistent API route gets 404
-        let reply = warp::test::request()
+        let resp = warp::test::request()
             .path("/api/noexist")
             .filter(&f)
             .await
             .unwrap();
-        assert_eq!(reply.into_response().status(), 404);
+        assert_eq!(resp.into_response().status(), 404);
 
         // login without header has 400 response with missing header
-        let reply = warp::test::request()
+        let resp = warp::test::request()
             .method("POST")
             .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
             .path("/api/login")
             .reply(&f).await;
-        assert_eq!(reply.status(), 400);
-        assert!(from_utf8(reply.body()).expect("bad utf8").contains("Missing request header"));
+        assert_eq!(resp.status(), 400);
+        assert_eq!(resp_body(&resp), "Invalid request");
 
         // login with incorrect credentials gets 400 response with wrong credentials
-        let reply = warp::test::request()
+        let resp = warp::test::request()
             .method("POST")
             .header("user-agent", "cargo test")
             .body(r#"{"email":"hello","pw":"bye"}"#)
             .path("/api/login")
             .reply(&f).await;
-        assert_eq!(reply.status(), 400);
-        assert!(from_utf8(reply.body()).expect("bad utf8").contains("wrong credentials"));
+        assert_eq!(resp.status(), 400);
+        assert!(resp_body(&resp).contains("wrong credentials"));
     }
 
     #[tokio::test]
     async fn test_api_bad_access() {
         let f = create_api_filter().await;
 
-        // check that nonexistent API route gets 404
-        let reply = warp::test::request()
-            .path("/api/noexist")
-            .filter(&f)
-            .await
-            .unwrap();
-        assert_eq!(reply.into_response().status(), 404);
-
-        // login without header has 400 response with missing header
-        let reply = warp::test::request()
-            .method("POST")
-            .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
-            .path("/api/login")
-            .reply(&f).await;
-        assert_eq!(reply.status(), 400);
-        assert!(from_utf8(reply.body()).expect("bad utf8").contains("Missing request header"));
-
-        // login with incorrect credentials gets 400 response with wrong credentials
-        let reply = warp::test::request()
-            .method("POST")
+        // test missing cookie header
+        let cookie = get_refresh_token(&f, "user@localhost", "userpassword").await;
+        let resp = warp::test::request()
+            .method("GET")
             .header("user-agent", "cargo test")
-            .body(r#"{"email":"hello","pw":"bye"}"#)
-            .path("/api/login")
-            .reply(&f).await;
-        assert_eq!(reply.status(), 400);
-        assert!(from_utf8(reply.body()).expect("bad utf8").contains("wrong credentials"));
+            .path("/api/auth/access")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 400);
+        assert!(resp_body(&resp).contains("Invalid request header"));
+
+        // test missing user agent header
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("cookie", cookie.as_ref() as &[u8])
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 400);
+        assert_eq!(resp_body(&resp), "Invalid request");
+
+        // test invalid cookie
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("user-agent", "cargo test")
+            .header("cookie", "notarealcookie")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 400);
+        assert!(resp_body(&resp).contains("Missing request cookie"));
+
+        // test correct cookie name but invalid value
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("user-agent", "cargo test")
+            .header("cookie", "refresh_token=notarealcookie")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+        assert!(resp_body(&resp).contains("refresh token not valid"));
+
+        // test correct usage
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("user-agent", "cargo test")
+            .header("cookie", cookie.as_ref() as &[u8])
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 200);
+
+        // test correct cookie but different user agent
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("user-agent", "cargo test v2")
+            .header("cookie", cookie.as_ref() as &[u8])
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+        assert!(resp_body(&resp).contains("refresh token not valid"));
+
+        // test correct usage, but no longer valid due to use of cookie with different agent
+        let resp = warp::test::request()
+            .method("GET")
+            .path("/api/auth/access")
+            .header("user-agent", "cargo test")
+            .header("cookie", cookie.as_ref() as &[u8])
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+        assert!(resp_body(&resp).contains("refresh token not valid"));
+    }
+
+    #[tokio::test]
+    async fn test_bad_authorize() {
+        let f = create_api_filter().await;
+        let access_token = get_access_token(&f, "admin@localhost", "adminpassword").await;
+        // user can access user api
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("{}", &access_token))
+            .path("/api/user")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 400);
+        assert!(resp_body(&resp).contains("invalid auth header"));
+
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", "Bearer badtoken")
+            .path("/api/user")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+        assert!(resp_body(&resp).contains("jwt token not valid"));
+
+        let resp = warp::test::request()
+            .method("GET")
+            .header("authorization", format!("Bearer b{}", &access_token))
+            .path("/api/user")
+            .reply(&f)
+            .await;
+        assert_eq!(resp.status(), 403);
+        assert!(resp_body(&resp).contains("jwt token not valid"));
     }
 }

@@ -66,6 +66,17 @@ pub async fn handle_rejection(
         Ok(warp::reply::with_status(json, code).into_response())
     } else {
         debug!("builtin rejection: {:?}", err);
-        Ok(err.default_response())
+        Ok(if let Some(e) = err.find::<warp::reject::MissingHeader>() {
+            // hide that we're checking for user-agent
+            if e.name() == "user-agent" {
+                warp::hyper::Response::builder()
+                    .status(400)
+                    .body(warp::hyper::body::Body::from("Invalid request")).expect("constructed bad resp")
+            } else {
+                err.default_response()
+            }
+        } else {
+            err.default_response()
+        })
     }
 }
