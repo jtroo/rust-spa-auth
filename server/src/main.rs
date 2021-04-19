@@ -84,7 +84,7 @@ async fn init_store(db: Option<String>) -> impl storage::Storage + Send + Sync +
 }
 
 #[cfg(feature = "in_memory")]
-async fn init_store(_b: Option<String>) -> impl storage::Storage + Send + Sync + Clone {
+async fn init_store(_: Option<String>) -> impl storage::Storage + Send + Sync + Clone {
     let store = storage::new_in_memory_storage();
     // Need to store some default users for in_memory, otherwise nothing will exist. This
     // does not apply to a database, because a database can have pre-existing users.

@@ -10,7 +10,7 @@ GITROOT=$(git rev-parse --show-toplevel)
 
 echo
 echo "Running tests with in_memory store"
-cargo test --features in_memory -- --nocapture
+cargo test --features in_memory
 
 echo
 echo "Running tests with database store"
@@ -26,4 +26,4 @@ trap cleanup EXIT
 cd $GITROOT/server/db
 ./create_sqlite3_db.sh $DATABASE
 
-DATABASE_URL=sqlite://$DATABASE cargo test -- --nocapture
+DATABASE_URL=sqlite://$DATABASE cargo test

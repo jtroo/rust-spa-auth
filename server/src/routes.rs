@@ -154,3 +154,95 @@ async fn user_handler(email: String) -> Result<impl warp::Reply, warp::Rejection
 async fn admin_handler(email: String) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(format!("admin {}", email))
 }
+
+#[cfg(all(test, feature = "in_memory"))]
+mod tests {
+    use super::*;
+    use warp::Reply;
+    use std::str::from_utf8;
+
+    async fn create_api_filter() -> BoxedFilter<(impl reply::Reply,)> {
+        let test_store = crate::init_store(None).await;
+        api(test_store)
+    }
+
+    #[tokio::test]
+    async fn test_api_success() {
+        let f = create_api_filter().await;
+
+        // check that login with incorrect credentials gets 400 response
+        let response = warp::test::request()
+            .method("POST")
+            .header("user-agent", "cargo test")
+            .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
+            .path("/api/login")
+            .reply(&f)
+            .await;
+        assert_eq!(response.status(), 200);
+        dbg!(response);
+    }
+
+    #[tokio::test]
+    async fn test_api_bad_login() {
+        let f = create_api_filter().await;
+
+        // check that nonexistent API route gets 404
+        let reply = warp::test::request()
+            .path("/api/noexist")
+            .filter(&f)
+            .await
+            .unwrap();
+        assert_eq!(reply.into_response().status(), 404);
+
+        // login without header has 400 response with missing header
+        let reply = warp::test::request()
+            .method("POST")
+            .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
+            .path("/api/login")
+            .reply(&f).await;
+        assert_eq!(reply.status(), 400);
+        assert!(from_utf8(reply.body()).expect("bad utf8").contains("Missing request header"));
+
+        // login with incorrect credentials gets 400 response with wrong credentials
+        let reply = warp::test::request()
+            .method("POST")
+            .header("user-agent", "cargo test")
+            .body(r#"{"email":"hello","pw":"bye"}"#)
+            .path("/api/login")
+            .reply(&f).await;
+        assert_eq!(reply.status(), 400);
+        assert!(from_utf8(reply.body()).expect("bad utf8").contains("wrong credentials"));
+    }
+
+    #[tokio::test]
+    async fn test_api_bad_access() {
+        let f = create_api_filter().await;
+
+        // check that nonexistent API route gets 404
+        let reply = warp::test::request()
+            .path("/api/noexist")
+            .filter(&f)
+            .await
+            .unwrap();
+        assert_eq!(reply.into_response().status(), 404);
+
+        // login without header has 400 response with missing header
+        let reply = warp::test::request()
+            .method("POST")
+            .body(r#"{"email":"user@localhost","pw":"userpassword"}"#)
+            .path("/api/login")
+            .reply(&f).await;
+        assert_eq!(reply.status(), 400);
+        assert!(from_utf8(reply.body()).expect("bad utf8").contains("Missing request header"));
+
+        // login with incorrect credentials gets 400 response with wrong credentials
+        let reply = warp::test::request()
+            .method("POST")
+            .header("user-agent", "cargo test")
+            .body(r#"{"email":"hello","pw":"bye"}"#)
+            .path("/api/login")
+            .reply(&f).await;
+        assert_eq!(reply.status(), 400);
+        assert!(from_utf8(reply.body()).expect("bad utf8").contains("wrong credentials"));
+    }
+}
