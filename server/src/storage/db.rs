@@ -16,8 +16,8 @@ fn map_sqlx_err(e: sqlx::Error) -> Error {
 #[async_trait::async_trait]
 impl Storage for SqlitePool {
     async fn get_user(&self, email: &str) -> Result<Option<User>, Error> {
-        sqlx::query!(
-            "SELECT email, hashed_pw, role FROM users WHERE email = ?",
+        sqlx::query_file!(
+            "src/storage/get_user.sql",
             email,
         )
         .fetch_optional(self)
@@ -35,7 +35,7 @@ impl Storage for SqlitePool {
     async fn store_user(&self, user: User) -> Result<(), Error> {
         let role = user.role.to_str().to_owned();
         match sqlx::query!(
-            "INSERT OR REPLACE INTO users VALUES(?, ?, ?)",
+            "INSERT OR REPLACE INTO users VALUES(?1, ?2, ?3)",
             user.email,
             user.hashed_pw,
             role,
