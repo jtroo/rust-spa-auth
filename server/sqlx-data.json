@@ -1,0 +1,81 @@
+{
+  "db": "SQLite",
+  "70dabd87113503cce92ae83b12d90c9f4d2c4d3a4dcbd9896d3bc2e6204e573e": {
+    "query": "INSERT OR REPLACE INTO users VALUES(?1, ?2, ?3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Right": 3
+      },
+      "nullable": []
+    }
+  },
+  "791f51673addeacb38195195deea53c1940c9c3c04a3bb670613c615f52e423c": {
+    "query": "DELETE FROM refresh_tokens WHERE email = ? AND user_agent = ? AND expires = ?",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Right": 3
+      },
+      "nullable": []
+    }
+  },
+  "84c8721a4c05b4ac51cc5dfd8e45c8bd0b4e552536064beefb75eab39bbf7834": {
+    "query": "SELECT email, hashed_pw, role FROM users WHERE email = ?1;\n",
+    "describe": {
+      "columns": [
+        {
+          "name": "email",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "hashed_pw",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "role",
+          "ordinal": 2,
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Right": 1
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "b6691dc0338507d07f5fa3869189234c86fcd2e7ca9e8c8117d32d830df3e941": {
+    "query": "INSERT OR REPLACE INTO refresh_tokens VALUES(?, ?, ?)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Right": 3
+      },
+      "nullable": []
+    }
+  },
+  "f61f8a90098f1c273198225f84b32199b66a53b893eb9b17c8059211d3c42262": {
+    "query": "SELECT expires FROM refresh_tokens WHERE email = ? AND user_agent = ? AND expires = ?",
+    "describe": {
+      "columns": [
+        {
+          "name": "expires",
+          "ordinal": 0,
+          "type_info": "Int64"
+        }
+      ],
+      "parameters": {
+        "Right": 3
+      },
+      "nullable": [
+        true
+      ]
+    }
+  }
+}

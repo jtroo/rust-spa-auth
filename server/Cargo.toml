@@ -21,7 +21,7 @@ env_logger = "0.8"
 log = "0.4"
 structopt = { version = "0.3", features = ["paw"] }
 paw = "1"
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "all", "any" ] }
+sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "all", "any", "offline" ] }
 
 rand = { version = "0.8", features = ["std_rng"] }
 argon2 = { version = "0.1", features = ["password-hash"] }
