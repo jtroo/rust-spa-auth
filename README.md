@@ -13,9 +13,9 @@ online, e.g. [JWT with warp](#special-mentions).
 Though I am somewhat informed, I am not a security expert. Don't deploy this
 code to production.
 
-# Demo
+# Demo video
 
-![Demo video](https://user-images.githubusercontent.com/6634136/113497053-c2505200-94b4-11eb-8010-27a132a010e9.mp4)
+[Click here](https://user-images.githubusercontent.com/6634136/113497053-c2505200-94b4-11eb-8010-27a132a010e9.mp4)
 
 # Dependencies
 
